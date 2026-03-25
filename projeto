@@ -1,0 +1,156 @@
+Documento de Visão e Escopo: GTD Pedagógico Unioeste
+1. Informações Básicas
+
+    Nome do Projeto: GTD Pedagógico Unioeste (Gestão de Tarefas e Descompressão Acadêmica)
+
+    Data de Início: 25 de março de 2026
+
+    Gerente do Projeto: Yuri Garcia Pardinho
+
+    Públic-Alvo Principal: Estudantes do 1º ao 4º ano de Pedagogia da Unioeste, campus Francisco Beltrão.
+
+2. Justificativa do Projeto
+
+O curso de Pedagogia da Unioeste exige uma carga de leitura teórica densa. Os estudantes relatam alta sobrecarga cognitiva ao gerenciar prazos e certificados de Atividades Curriculares Complementares (ACCs) de forma informal.
+
+A ausência de um repositório centralizado resulta em estresse e extravio de documentos. Este projeto aplica o método Getting Things Done (GTD) para externalizar a carga mental para um sistema digital confiável, permitindo foco total na aprendizagem.
+3. Objetivos do Projeto (Metas SMART)
+
+    Lançar a versão 1.0 do aplicativo web 
+
+    Fornecer repositório criptografado para até 200 horas de certificados por usuário.
+
+    Implementar interface de fatiamento de tarefas para metas diárias acionáveis.
+
+    Garantir 100% de conformidade com segurança defensiva Shift-Left.
+
+4. Escopo do Projeto
+O que está incluído
+
+    Diretriz de Design (Mobile-First but not only): O sistema será projetado prioritariamente para interfaces móveis para facilitar a captura rápida de tarefas (GTD), mas deve ser totalmente funcional e esteticamente adaptado para navegadores desktop.
+
+    Módulo Caixa de Entrada: Interface otimizada para "descarregar" ideias em segundos via smartphone.
+
+    Módulo Fatiador de Leituras: Ferramenta visual para divisão de capítulos em blocos diários.
+
+    Cofre de ACCs: Repositório com upload de arquivos e somatório automático.
+
+    Segurança GSD: Backend construído com Desenvolvimento Orientado a Testes (TDD) e criptografia Argon2id.
+
+    Proteção Anti-Enumeração: Login blindado com mensagens padronizadas.
+
+    Dashboards Visuais: Painéis de progresso e telemetria.
+
+O que está fora do escopo
+
+    Geração de textos ou planos de aula por IA.
+
+    Integração direta com os sistemas Academus ou Sagu da Unioeste.
+
+    Funcionalidades de rede social ou compartilhamento público.
+
+5. Requisitos do Sistema
+5.1. Requisitos Funcionais (RF)
+
+    RF-01: Cadastro de disciplinas e professores.
+
+    RF-02: Captura instantânea na "Caixa de Entrada".
+
+    RF-03: Cálculo de divisão de páginas por dia.
+
+    RF-04: Upload de documentos de até 5MB no Cofre de ACCs.
+
+    RF-05: Barra de progresso visual das horas acumuladas.
+
+    RF-06: Categorização em "Próximas Ações" ou "Aguardando".
+
+    RF-07: Recuperação de senha segura via e-mail.
+
+    RF-08: Gráficos dinâmicos de avanço das leituras.
+
+    RF-09: Log de eventos de segurança para o administrador.
+
+    RF-10: Alerta de 90% da cota de armazenamento.
+
+5.2. Requisitos Não Funcionais (RNF)
+
+    RNF-01: Certificados armazenados com criptografia em repouso.
+
+    RNF-02 (Prioridade Mobile): A interface deve seguir a estratégia Mobile-First, garantindo que o tempo de resposta e a ergonomia sejam perfeitos em telas pequenas, expandindo a complexidade visual apenas em telas maiores.
+
+    RNF-03: Cobertura de testes unitários (TDD) superior a 90%.
+
+    RNF-04: Carregamento inicial em menos de 2 segundos em redes móveis (4G/5G).
+
+    RNF-05: Descarte silencioso de tráfego malicioso.
+
+    RNF-06: Privacidade total dos arquivos dos alunos perante o administrador.
+
+6. Dashboards e Administração
+Para o Estudante (Cockpit Móvel)
+
+    Termômetro de ACCs: Gráfico circular de progresso.
+
+    Status de Carga Mental: Proporção de tarefas pendentes.
+
+    Timeline de Leitura: Indicador de ritmo para prazos.
+
+Para o Administrador (Torre de Controle)
+
+    Monitor de segurança e integridade do banco de dados.
+
+    Saúde do servidor e taxa de sucesso dos deploys.
+
+    Volume total de armazenamento utilizado.
+
+7. Cronograma de Marcos (Milestones)
+Marco	Descrição da Entrega	Previsão
+Fase 1: Kickoff	Aprovação de escopo e requisitos técnicos	
+Fase 2: Fundação	Banco de dados, TDD e login blindado	
+Fase 3: Core App	Módulo GTD, Fatiador e Cofre ACC	
+Fase 4: Homologação	Testes de aceitação com grupo focal	
+Fase 5: Lançamento	Disponibilização oficial Unioeste FB	(Manual)
+8. Partes Interessadas (Stakeholders)
+
+    Patrocinadores: Centro Acadêmico de Pedagogia.
+
+    Usuários Finais: Acadêmicos da Unioeste campus FB.
+
+    Engenharia: Yuri Garcia Pardinho e equipe GSD.
+
+9. Riscos e Mitigação
+
+    Risco Tecnológico: Perda de dados (Mitigação: TDD rigoroso).
+
+    Risco de Segurança: Acessos indevidos (Mitigação: Criptografia Argon2id e tecnologias de decepção).
+
+    Risco de Adoção: Baixa utilização (Mitigação: Interface minimalista focada em uso móvel imediato).
+
+User Stories Detalhadas
+US-002: Fatiador de Leituras Acadêmicas
+
+Título: Fracionamento de Carga de Leitura Teórica
+Como estudante, quero inserir o total de páginas e o prazo para que o sistema calcule minha meta diária.
+
+    Lógica: O sistema utiliza a fórmula
+    Metadiaria​=⌈Prazodias​Paginastotais​​⌉
+
+    Critério: Se o resultado for maior que 30 páginas por dia, exibir alerta de sobrecarga.
+
+    Mobile-First: A entrada de dados deve ser simplificada com seletores numéricos grandes e fáceis de tocar.
+
+US-003: Cofre de ACCs
+
+Título: Armazenamento e Somatório de Horas Complementares
+Como estudante, quero fazer upload de certificados para backup seguro e controle de horas faltantes.
+
+    Segurança: Arquivos renomeados com hash único e criptografados.
+
+    Upload: Suporte a PDF, JPG e PNG até 5MB.
+
+    Mobile-First: Permitir o uso da câmera do celular para "escanear" e subir o certificado instantaneamente.
+    
+    
+ -----
+ 
+ Criptografia -- argon2id
