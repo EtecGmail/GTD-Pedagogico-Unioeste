@@ -16,6 +16,7 @@ from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
 from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
 from gtd_backend.rf05 import RF05Service
+from gtd_backend.rf06 import RF06Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -140,6 +141,25 @@ class InboxItemListResponse(BaseModel):
     createdAt: str
 
 
+class UpdateInboxItemStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(min_length=1, max_length=30)
+
+    @field_validator("status")
+    @classmethod
+    def validateStatus(cls, status: str) -> str:
+        normalizedStatus = status.strip().lower()
+        if normalizedStatus not in {"next_action", "waiting"}:
+            raise ValueError("status de destino inválido")
+        return normalizedStatus
+
+
+class UpdateInboxItemStatusResponse(BaseModel):
+    id: int
+    status: str
+
+
 class CreateReadingPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -248,6 +268,7 @@ def createApp(
     app.state.rf03Service = RF03Service()
     app.state.rf04Service = RF04Service(storage=InMemoryCertificateStorage())
     app.state.rf05Service = RF05Service(rf04Service=app.state.rf04Service, defaultTargetHours=200)
+    app.state.rf06Service = RF06Service(rf02Service=app.state.rf02Service)
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -357,6 +378,40 @@ def createApp(
     @app.get("/rf02/inbox-items", response_model=list[InboxItemListResponse])
     def listInboxItems():
         return app.state.rf02Service.listInboxItems()
+
+
+    @app.patch(
+        "/rf06/inbox-items/{itemId}/status",
+        response_model=UpdateInboxItemStatusResponse,
+        responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    )
+    def changeInboxItemStatus(itemId: int, request: UpdateInboxItemStatusRequest):
+        try:
+            updatedItem = app.state.rf06Service.changeInboxItemStatus(
+                itemId=itemId,
+                targetStatus=request.status,
+            )
+        except LookupError as error:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "message": str(error)},
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return UpdateInboxItemStatusResponse(**updatedItem)
+
+    @app.get("/rf06/inbox-items", response_model=list[InboxItemListResponse])
+    def listInboxItemsByStatus(status: str = Query(default="inbox")):
+        try:
+            return app.state.rf06Service.listInboxItems(status=status)
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
 
     @app.post(
         "/rf03/reading-plans",
