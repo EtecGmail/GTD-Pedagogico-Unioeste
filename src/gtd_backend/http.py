@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gtd_backend.auth import AuthService
 from gtd_backend.rf01 import RF01Service
+from gtd_backend.rf02 import RF02Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -109,6 +110,31 @@ class DisciplineListItem(BaseModel):
     professorIds: list[int]
 
 
+class CreateInboxItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=500)
+
+    @field_validator("content")
+    @classmethod
+    def validateContent(cls, content: str) -> str:
+        normalizedContent = " ".join(content.strip().split())
+        if not normalizedContent:
+            raise ValueError("conteúdo da captura é obrigatório")
+        return normalizedContent
+
+
+class CreateInboxItemResponse(BaseModel):
+    id: int
+
+
+class InboxItemListResponse(BaseModel):
+    id: int
+    content: str
+    status: str
+    createdAt: str
+
+
 class RateLimiter:
     def allow(self, key: str, now: float | None = None) -> bool:
         raise NotImplementedError
@@ -157,6 +183,7 @@ def createApp(
     app = FastAPI(title="GTD Pedagógico Unioeste")
     app.state.authService = AuthService()
     app.state.rf01Service = RF01Service()
+    app.state.rf02Service = RF02Service()
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -246,5 +273,25 @@ def createApp(
     @app.get("/rf01/disciplines", response_model=list[DisciplineListItem])
     def listDisciplines():
         return app.state.rf01Service.listDisciplines()
+
+    @app.post(
+        "/rf02/inbox-items",
+        response_model=CreateInboxItemResponse,
+        status_code=201,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def captureInboxItem(request: CreateInboxItemRequest):
+        try:
+            inboxItemId = app.state.rf02Service.captureInboxItem(content=request.content)
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return CreateInboxItemResponse(id=inboxItemId)
+
+    @app.get("/rf02/inbox-items", response_model=list[InboxItemListResponse])
+    def listInboxItems():
+        return app.state.rf02Service.listInboxItems()
 
     return app
