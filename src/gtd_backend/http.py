@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gtd_backend.auth import AuthService
+from gtd_backend.rf01 import RF01Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -33,6 +34,79 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     success: bool
     message: str
+
+
+class ErrorResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class CreateProfessorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=3, max_length=120)
+    email: str = Field(min_length=3, max_length=255)
+
+    @field_validator("name")
+    @classmethod
+    def validateName(cls, name: str) -> str:
+        normalizedName = " ".join(name.strip().split())
+        if len(normalizedName) < 3:
+            raise ValueError("nome do professor inválido")
+        return normalizedName
+
+    @field_validator("email")
+    @classmethod
+    def validateProfessorEmail(cls, email: str) -> str:
+        normalizedEmail = email.strip().lower()
+        if "@" not in normalizedEmail:
+            raise ValueError("email do professor inválido")
+        return normalizedEmail
+
+
+class CreateProfessorResponse(BaseModel):
+    id: int
+
+
+class ProfessorListItem(BaseModel):
+    id: int
+    name: str
+    email: str
+
+
+class CreateDisciplineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=3, max_length=120)
+    code: str = Field(min_length=2, max_length=30)
+    professorIds: list[int] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def validateDisciplineName(cls, name: str) -> str:
+        normalizedName = " ".join(name.strip().split())
+        if len(normalizedName) < 3:
+            raise ValueError("nome da disciplina inválido")
+        return normalizedName
+
+    @field_validator("code")
+    @classmethod
+    def validateDisciplineCode(cls, code: str) -> str:
+        normalizedCode = code.strip().upper()
+        if len(normalizedCode) < 2:
+            raise ValueError("código da disciplina inválido")
+        return normalizedCode
+
+
+class CreateDisciplineResponse(BaseModel):
+    id: int
+
+
+class DisciplineListItem(BaseModel):
+    id: int
+    name: str
+    code: str
+    professorIds: list[int]
 
 
 class RateLimiter:
@@ -82,6 +156,7 @@ def createApp(
 ) -> FastAPI:
     app = FastAPI(title="GTD Pedagógico Unioeste")
     app.state.authService = AuthService()
+    app.state.rf01Service = RF01Service()
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -124,5 +199,52 @@ def createApp(
             _minimizeEmailIdentifier(loginRequest.email),
         )
         return LoginResponse(success=True, message=authResult.message)
+
+    @app.post(
+        "/rf01/professors",
+        response_model=CreateProfessorResponse,
+        status_code=201,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def createProfessor(request: CreateProfessorRequest):
+        try:
+            professorId = app.state.rf01Service.createProfessor(
+                name=request.name,
+                email=request.email,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return CreateProfessorResponse(id=professorId)
+
+    @app.get("/rf01/professors", response_model=list[ProfessorListItem])
+    def listProfessors():
+        return app.state.rf01Service.listProfessors()
+
+    @app.post(
+        "/rf01/disciplines",
+        response_model=CreateDisciplineResponse,
+        status_code=201,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def createDiscipline(request: CreateDisciplineRequest):
+        try:
+            disciplineId = app.state.rf01Service.createDiscipline(
+                name=request.name,
+                code=request.code,
+                professorIds=request.professorIds,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return CreateDisciplineResponse(id=disciplineId)
+
+    @app.get("/rf01/disciplines", response_model=list[DisciplineListItem])
+    def listDisciplines():
+        return app.state.rf01Service.listDisciplines()
 
     return app
