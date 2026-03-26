@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from base64 import b64decode
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -15,6 +15,7 @@ from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
 from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
+from gtd_backend.rf05 import RF05Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -186,6 +187,15 @@ class CertificateListItem(BaseModel):
     metadata: dict[str, int | bool]
     createdAt: str
 
+
+class AccHoursProgressResponse(BaseModel):
+    totalHours: int
+    targetHours: int
+    remainingHours: int
+    percentage: float
+    isCompleted: bool
+
+
 class RateLimiter:
     def allow(self, key: str, now: float | None = None) -> bool:
         raise NotImplementedError
@@ -237,6 +247,7 @@ def createApp(
     app.state.rf02Service = RF02Service()
     app.state.rf03Service = RF03Service()
     app.state.rf04Service = RF04Service(storage=InMemoryCertificateStorage())
+    app.state.rf05Service = RF05Service(rf04Service=app.state.rf04Service, defaultTargetHours=200)
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -404,5 +415,16 @@ def createApp(
     @app.get("/rf04/certificates", response_model=list[CertificateListItem])
     def listCertificates():
         return app.state.rf04Service.listCertificates()
+
+    @app.get("/rf05/acc-progress", response_model=AccHoursProgressResponse)
+    def getAccHoursProgress(targetHours: int | None = Query(default=None, gt=0, le=10000)):
+        try:
+            progress = app.state.rf05Service.getAccHoursProgress(targetHours=targetHours)
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return AccHoursProgressResponse(**progress)
 
     return app
