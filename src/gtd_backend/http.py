@@ -4,6 +4,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from base64 import b64decode
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -12,6 +14,7 @@ from gtd_backend.auth import AuthService
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
+from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -157,6 +160,32 @@ class ReadingPlanListResponse(BaseModel):
     createdAt: str
 
 
+
+
+class CreateCertificateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    originalName: str = Field(min_length=1, max_length=255)
+    contentType: str = Field(min_length=1, max_length=100)
+    contentBase64: str = Field(min_length=1)
+    hours: int | None = Field(default=None, ge=0, le=200)
+
+
+class CreateCertificateResponse(BaseModel):
+    id: int
+
+
+class CertificateListItem(BaseModel):
+    id: int
+    fileIdentifier: str
+    originalName: str
+    contentType: str
+    sizeBytes: int
+    hours: int | None
+    storageKey: str
+    metadata: dict[str, int | bool]
+    createdAt: str
+
 class RateLimiter:
     def allow(self, key: str, now: float | None = None) -> bool:
         raise NotImplementedError
@@ -207,6 +236,7 @@ def createApp(
     app.state.rf01Service = RF01Service()
     app.state.rf02Service = RF02Service()
     app.state.rf03Service = RF03Service()
+    app.state.rf04Service = RF04Service(storage=InMemoryCertificateStorage())
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -339,5 +369,40 @@ def createApp(
     @app.get("/rf03/reading-plans", response_model=list[ReadingPlanListResponse])
     def listReadingPlans():
         return app.state.rf03Service.listReadingPlans()
+
+
+
+    @app.post(
+        "/rf04/certificates",
+        response_model=CreateCertificateResponse,
+        status_code=201,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def uploadCertificate(request: CreateCertificateRequest):
+        try:
+            fileContent = b64decode(request.contentBase64, validate=True)
+        except Exception:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "payload de arquivo inválido"},
+            )
+
+        try:
+            certificateId = app.state.rf04Service.uploadCertificate(
+                originalName=request.originalName,
+                contentType=request.contentType,
+                content=fileContent,
+                hours=request.hours,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return CreateCertificateResponse(id=certificateId)
+
+    @app.get("/rf04/certificates", response_model=list[CertificateListItem])
+    def listCertificates():
+        return app.state.rf04Service.listCertificates()
 
     return app
