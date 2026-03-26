@@ -103,6 +103,6 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 
 ## Próximos passos
 
-1. Evoluir o `AuthService` para camada HTTP (FastAPI) com limite de taxa e honeypot no formulário público.
+1. Evoluir a borda HTTP de autenticação com rate limit desacoplado (abstração de storage) e logging de segurança sem dados sensíveis; honeypot fica reservado para formulários HTML, não para API JSON pura.
 2. Configurar CI/CD para rodar testes automaticamente a cada commit/pull request.
 3. Iniciar RF‑01 e RF‑02 mantendo cobertura de testes >90%.

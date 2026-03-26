@@ -11,6 +11,7 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | ENV-CONFIG | Configurar ambientes Codex (`default-dev`, `web-research`), variáveis e secrets | done | Codex | `poetry install --with dev,test` validado com sucesso neste ambiente controlado. |
 | AUTH-SECURITY | Implementar autenticação com Argon2id e login blindado | done | Codex | Login blindado com mensagem genérica e mitigação de timing attack preservados. |
 | AUTH-HTTP | Implementar camada HTTP mínima de autenticação com FastAPI | done | Codex | Endpoint `POST /auth/login` implementado via TDD reutilizando `AuthService`. |
+| AUTH-EDGE-HARDEN | Endurecer borda pública do `POST /auth/login` (rate limit, logs e validações complementares) | done | Codex | Rate limit 429 com abstração testável (`RateLimiter`), logging minimizado (`email_hash`) e validação `extra="forbid"`. |
 | RF-01 | Cadastro de disciplinas e professores (testes + implementação) | todo | — | — |
 | RF-02 | Caixa de Entrada (testes + implementação) | todo | — | — |
 | RF-03 | Fatiador de leituras (testes + implementação) | todo | — | — |
@@ -33,30 +34,24 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - **26/03/2026 (infra/poetry)** – Estabilização da configuração do Poetry: incluído `package-mode = false` para impedir falha de instalação do projeto raiz sem pacote instalado e criados grupos `dev` e `test` em `tool.poetry.group.*` para compatibilidade com `poetry install --with dev,test`. `poetry lock` atualizado com sucesso. Instalação de dependências e execução de testes ficaram bloqueadas por falha de conectividade com `files.pythonhosted.org`.
 - **26/03/2026 (auth/http)** – Ambiente validado com sucesso (`poetry install --with dev,test` e `poetry run pytest`). Em seguida, foi implementada camada HTTP mínima com FastAPI usando TDD: novos testes para `POST /auth/login` criados antes da implementação, cobrindo credenciais válidas, resposta cega para usuário inexistente/senha incorreta e validação explícita de entrada. Ajuste técnico aplicado no SQLite em memória (`check_same_thread=False`) para compatibilidade com execução em thread no `TestClient`. Suíte final: `8 passed`.
 
+- **26/03/2026 (auth/hardening)** – Endurecimento da borda pública de autenticação via TDD. Primeiro foram escritos testes para abstração de rate limit e para o endpoint (`POST /auth/login`) cobrindo bloqueio por excesso de tentativas (status `429`), preservação do login blindado e logs de segurança sem vazamento de senha/e-mail bruto. Implementada abstração `RateLimiter` com `MemoryRateLimiter` (storage substituível), chave de limitação por IP + hash reduzido de e-mail e validação de payload com `extra="forbid"`. Decisão técnica documentada: honeypot não é apropriado para API JSON pura (mais útil em formulários HTML para bots de preenchimento). Suíte final: `12 passed`.
+
 ### Arquivos modificados no ciclo atual
-- `pyproject.toml`
-- `poetry.lock`
-- `src/gtd_backend/auth.py`
 - `src/gtd_backend/http.py`
 - `tests/test_auth_http.py`
+- `PLAN.md`
 - `STATE.md`
 
 ### Comandos executados e resultados
-- `poetry install --with dev,test` (sucesso, sem pendências de instalação neste ambiente).
-- `poetry run pytest` (sucesso inicial, `5 passed`).
-- `poetry run pytest` (falha esperada em TDD após criar testes HTTP, `ModuleNotFoundError: No module named 'fastapi'`).
-- `poetry add fastapi` (sucesso, dependência mínima da camada HTTP adicionada e lock atualizado).
-- `poetry run pytest` (falha esperada em TDD, `starlette.testclient` exigiu `httpx`).
-- `poetry add --group test httpx` (sucesso, dependência de teste adicionada e lock atualizado).
-- `poetry run pytest` (falha esperada em TDD após implementação inicial HTTP, erro de thread no SQLite: `check_same_thread`).
-- `poetry run pytest` (sucesso após ajuste técnico no SQLite, `8 passed in 5.64s`).
+- `poetry run pytest -q` (falha esperada no ciclo TDD após criação dos testes: `ImportError: cannot import name 'MemoryRateLimiter'`).
+- `poetry run pytest -q` (sucesso após implementação incremental: `12 passed`).
 
 ### Problemas/riscos remanescentes
-- Endpoint público de login ainda sem rate limit e sem honeypot; permanece risco de abuso por força bruta.
-- Persistência segue em SQLite em memória no serviço atual; será necessário evoluir para repositório persistente (SQLite arquivo/PostgreSQL) em próximas iterações.
-- Ainda não há emissão de token/sessão após login; no momento a camada HTTP apenas valida credenciais.
+- `MemoryRateLimiter` em memória não compartilha estado entre múltiplas instâncias/processos; para produção distribuída será necessário backend centralizado (ex.: Redis).
+- Identificação por IP pode sofrer efeitos de NAT/proxy; pode exigir ajuste com headers confiáveis em ambiente com reverse proxy.
+- Logs minimizados (hash parcial de e-mail) equilibram privacidade e rastreabilidade, mas reduzem contexto investigativo bruto.
 
 ### Próximos passos
-- Adicionar proteção anti-abuso no `POST /auth/login` (rate limit + estratégia de honeypot para formulários públicos).
+- Evoluir `RateLimiter` para armazenamento compartilhado mantendo a mesma interface, sem refatorar o endpoint.
 - Introduzir gerenciamento de sessão/token com rotação segura e testes de segurança associados.
 - Iniciar implementação dos RFs de domínio (RF-01 e RF-02) mantendo cobertura de testes >90%.
