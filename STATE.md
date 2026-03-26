@@ -17,12 +17,12 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | RF-03 | Fatiador de leituras (testes + implementação) | done | Codex | RF-03 implementado via TDD com `RF03Service` (SQLite em memória), cálculo com arredondamento para cima, alerta de sobrecarga (>30 págs/dia), validação explícita e endpoints mínimos de criação/listagem. |
 | RF-04 | Cofre de ACCs (upload seguro de certificados ACC) | done | Codex | RF-04 implementado via TDD com validação explícita de tipo/tamanho, identificador único, abstração de storage e endpoints mínimos de upload/listagem. |
 | RF-05 | Barra de progresso das horas acumuladas | done | Codex | RF-05 implementado via TDD com `RF05Service` reutilizando certificados do RF-04 e endpoint `GET /rf05/acc-progress`. |
-| RF-06 | Categorização em "Próximas Ações" e "Aguardando" | todo | — | — |
+| RF-06 | Categorização em "Próximas Ações" e "Aguardando" | done | Codex | RF-06 implementado via TDD com transição explícita (`inbox -> next_action|waiting`), rejeição de transições inválidas e endpoints mínimos para atualização/listagem por status. |
 | RF-07 | Recuperação de senha via e‑mail | todo | — | — |
 | RF-08 | Gráficos de avanço das leituras | todo | — | — |
 | RF-09 | Log de eventos de segurança | todo | — | — |
 | RF-10 | Alerta de 90 % de cota de armazenamento | todo | — | — |
-| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-05 e validações executadas. |
+| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-06 e validações executadas. |
 
 ## Histórico
 
@@ -43,17 +43,19 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 
 - **26/03/2026 (fase 3 / rf-05)** – Implementação do RF-05 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para cálculo de progresso ACC com `totalHours`, `targetHours`, `remainingHours`, `percentage` e `isCompleted`, incluindo casos sem certificados, meta ultrapassada e validação explícita de meta inválida. Em seguida, foi implementado `RF05Service` reutilizando `RF04Service` para agregação de horas sem duplicar persistência. Por fim, endpoint mínimo foi adicionado em FastAPI: `GET /rf05/acc-progress` com `targetHours` opcional para consumo futuro por dashboard/termômetro visual. Suíte final: `38 passed`.
 
+- **26/03/2026 (fase 3 / rf-06)** – Implementação do RF-06 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para transições de status da Caixa de Entrada (`inbox -> next_action` e `inbox -> waiting`), listagem por categoria, rejeição de item inexistente e rejeição de payload inválido/incompleto. Em seguida, foi implementado `RF06Service` reutilizando a persistência do `RF02Service`, com regras explícitas de transição e validação de status suportados. Por fim, endpoints mínimos foram adicionados em FastAPI: `PATCH /rf06/inbox-items/{itemId}/status` e `GET /rf06/inbox-items?status=...`. Suíte final: `48 passed`.
+
 ### Arquivos modificados no ciclo atual
 - `src/gtd_backend/http.py`
-- `src/gtd_backend/rf05.py`
-- `tests/test_rf05.py`
+- `src/gtd_backend/rf02.py`
+- `src/gtd_backend/rf06.py`
+- `tests/test_rf06.py`
 - `STATE.md`
 
 ### Comandos executados e resultados
-- `poetry run pytest -q tests/test_rf05.py` (falha esperada no ciclo TDD após criação dos testes: `ModuleNotFoundError: No module named 'gtd_backend.rf05'`).
-- `poetry run pytest -q tests/test_rf05.py` (falha intermediária após implementação inicial do endpoint: `AssertionError: non-body parameters must be in path, query, header or cookie: targetHours`).
-- `poetry run pytest -q tests/test_rf05.py` (sucesso após ajuste incremental com validação via `Query`: `5 passed`).
-- `poetry run pytest -q` (sucesso: `38 passed`).
+- `poetry run pytest -q tests/test_rf06.py` (falha esperada no ciclo TDD após criação dos testes: `ModuleNotFoundError: No module named 'gtd_backend.rf06'`).
+- `poetry run pytest -q tests/test_rf06.py` (sucesso após implementação incremental de serviço e endpoints: `10 passed`).
+- `poetry run pytest -q` (sucesso: `48 passed`).
 - `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
 
 ### Problemas/riscos remanescentes
@@ -62,13 +64,12 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Ainda não há autenticação/autorização aplicada nos endpoints de RF-01; isso deve ser incluído quando o módulo de sessão/token estiver disponível.
 - `RF02Service` também usa SQLite em memória por instância; para uso real será necessário storage compartilhado e estratégia de migração.
 - A ordenação atual de caixa de entrada usa `created_at DESC, id DESC`; em cenários distribuídos será importante padronizar relógio e timezone na camada de persistência.
-- `RF03Service` também usa SQLite em memória por instância; para acompanhamento contínuo de progresso e dashboards (RF-08) será necessário repositório persistente e versionamento de eventos de leitura.
-- O RF-03 inicial registra apenas criação/listagem do plano e campo `remainingPages` inicial; ainda falta fluxo de atualização do progresso para alimentar métricas temporais.
+- As transições de RF-06 estão restritas a `inbox -> next_action|waiting`; se houver necessidade futura de retorno para `inbox` ou transições entre categorias, será necessário explicitar nova política e cobertura de testes.
 - O `RF04Service` usa storage em memória sem criptografia em repouso nesta etapa; a abstração `CertificateStorage` foi criada para permitir evolução segura sem refatoração ampla (RNF-01 pendente).
 - O endpoint HTTP de upload do RF-04 foi implementado com JSON (`contentBase64`) por limitação de dependência de ambiente (`python-multipart` indisponível sem rede); para produção mobile/câmera, migrar para `multipart/form-data` assim que a dependência estiver disponível.
 
 ### Próximos passos
-- Integrar `GET /rf05/acc-progress` ao dashboard/termômetro visual do estudante (RF-08), com atualização reativa no frontend.
+- Integrar as categorias de RF-06 (`inbox`, `next_action`, `waiting`) ao dashboard do estudante para métricas de carga mental e acompanhamento GTD.
 - Evoluir `CertificateStorage` para provider persistente com criptografia em repouso (RNF-01), mantendo contrato atual.
 - Planejar migração do endpoint de upload para `multipart/form-data` com suporte mobile/câmera e validação de assinatura mágica de arquivo (defesa em profundidade).
 - Definir camada de persistência compartilhada para evitar múltiplos bancos em memória por serviço conforme avanço da fase 3.
