@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from gtd_backend.auth import AuthService
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
+from gtd_backend.rf03 import RF03Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -135,6 +136,27 @@ class InboxItemListResponse(BaseModel):
     createdAt: str
 
 
+class CreateReadingPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    totalPages: int = Field(gt=0, le=100000)
+    deadlineDays: int = Field(gt=0, le=3650)
+
+
+class CreateReadingPlanResponse(BaseModel):
+    id: int
+
+
+class ReadingPlanListResponse(BaseModel):
+    id: int
+    totalPages: int
+    deadlineDays: int
+    dailyGoal: int
+    isOverloaded: bool
+    remainingPages: int
+    createdAt: str
+
+
 class RateLimiter:
     def allow(self, key: str, now: float | None = None) -> bool:
         raise NotImplementedError
@@ -184,6 +206,7 @@ def createApp(
     app.state.authService = AuthService()
     app.state.rf01Service = RF01Service()
     app.state.rf02Service = RF02Service()
+    app.state.rf03Service = RF03Service()
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -293,5 +316,28 @@ def createApp(
     @app.get("/rf02/inbox-items", response_model=list[InboxItemListResponse])
     def listInboxItems():
         return app.state.rf02Service.listInboxItems()
+
+    @app.post(
+        "/rf03/reading-plans",
+        response_model=CreateReadingPlanResponse,
+        status_code=201,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def createReadingPlan(request: CreateReadingPlanRequest):
+        try:
+            readingPlanId = app.state.rf03Service.createReadingPlan(
+                totalPages=request.totalPages,
+                deadlineDays=request.deadlineDays,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return CreateReadingPlanResponse(id=readingPlanId)
+
+    @app.get("/rf03/reading-plans", response_model=list[ReadingPlanListResponse])
+    def listReadingPlans():
+        return app.state.rf03Service.listReadingPlans()
 
     return app
