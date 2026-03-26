@@ -9,9 +9,11 @@ Este plano de trabalho organiza o backlog de tarefas do projeto **GTD Pedagógic
    - Criar `PROJECT_CONTEXT.md`, `AGENTS.md`, `PLAN.md` e `STATE.md` (já preparados).
 
 2. **Definição da stack tecnológica**
-   - Selecionar frameworks adequados: por exemplo React/Vue para frontend; Node.js/Express ou Django/FastAPI para backend.
-   - Escolher bases de dados seguras (PostgreSQL + criptografia em repouso ou MongoDB com encryption at rest).
-   - Definir ferramentas de testes (Jest/Vitest/Cypress para JS, pytest para Python) e pipeline de CI.
+   - **Backend**: Python 3.12 com arquitetura em camadas (`domain`, `application`, `infra`) evoluindo a partir do módulo inicial `src/gtd_backend`.
+   - **API HTTP (fase seguinte)**: FastAPI para endpoints REST e validação de entrada com Pydantic.
+   - **Banco de dados**: PostgreSQL em produção; SQLite em memória para testes rápidos na fase de fundação.
+   - **Segurança**: Argon2id para hash de senhas + login blindado com respostas genéricas.
+   - **Testes**: pytest como base de TDD.
 
 3. **Configuração do ambiente Codex**
    - Criar environment `default-dev` com internet desligada para a maioria das tarefas, conforme as recomendações.
@@ -24,6 +26,29 @@ Este plano de trabalho organiza o backlog de tarefas do projeto **GTD Pedagógic
    - Escrever testes para garantir que mensagens de erro de login não revelam se o usuário existe.
    - Implementar camadas de criptografia em repouso para certificados.
    - Criar middleware de validação de entrada e descarte de tráfego malicioso.
+
+## Estrutura mínima proposta para Fase 2 (Fundação)
+
+```text
+src/
+  gtd_backend/
+    auth.py                # serviço de autenticação + hash Argon2id
+    security/              # políticas de segurança e utilitários (próxima iteração)
+    db/
+      schema.sql           # estrutura inicial de tabelas
+      repositories/        # acesso a dados por agregado
+
+tests/
+  test_auth.py             # testes de login blindado e hash seguro
+```
+
+### Modelo mínimo de banco (autenticação)
+- Tabela `users`:
+  - `id` (PK)
+  - `email` (UNIQUE, indexado)
+  - `password_hash` (Argon2id)
+  - `created_at` (timestamp, próxima iteração)
+  - `updated_at` (timestamp, próxima iteração)
 
 ## Backlog de funcionalidades
 
@@ -78,7 +103,6 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 
 ## Próximos passos
 
-1. Selecionar stack tecnológica e atualizar `PLAN.md` com detalhes da stack.
+1. Evoluir o `AuthService` para camada HTTP (FastAPI) com limite de taxa e honeypot no formulário público.
 2. Configurar CI/CD para rodar testes automaticamente a cada commit/pull request.
-3. Começar pela **Fase 2 – Fundação**, implementando a infraestrutura de banco de dados, autenticação e cobertura de testes básica.
-
+3. Iniciar RF‑01 e RF‑02 mantendo cobertura de testes >90%.
