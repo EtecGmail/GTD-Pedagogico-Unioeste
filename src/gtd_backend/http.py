@@ -51,7 +51,7 @@ class ErrorResponse(BaseModel):
     message: str
 
 
-class RequestPasswordResetBody(BaseModel):
+class RequestPasswordResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str = Field(min_length=3, max_length=255)
@@ -66,6 +66,34 @@ class RequestPasswordResetBody(BaseModel):
 
 
 class RequestPasswordResetResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class ConfirmPasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=20, max_length=255)
+    newPassword: str = Field(min_length=8, max_length=255)
+
+    @field_validator("token")
+    @classmethod
+    def validateToken(cls, token: str) -> str:
+        normalizedToken = token.strip()
+        if len(normalizedToken) < 20:
+            raise ValueError("credenciais inválidas")
+        return normalizedToken
+
+    @field_validator("newPassword")
+    @classmethod
+    def validateNewPassword(cls, newPassword: str) -> str:
+        normalizedPassword = newPassword.strip()
+        if len(normalizedPassword) < 8:
+            raise ValueError("credenciais inválidas")
+        return normalizedPassword
+
+
+class ConfirmPasswordResetResponse(BaseModel):
     success: bool
     message: str
 
@@ -307,9 +335,9 @@ def _minimizeEmailIdentifier(email: str) -> str:
     return hashlib.sha256(email.encode("utf-8")).hexdigest()[:12]
 
 
-def _buildRateLimitKey(clientIp: str, email: str) -> str:
+def _buildRateLimitKey(clientIp: str, email: str, scope: str = "default") -> str:
     minimizedEmail = _minimizeEmailIdentifier(email)
-    return f"ip:{clientIp}|email:{minimizedEmail}"
+    return f"scope:{scope}|ip:{clientIp}|email:{minimizedEmail}"
 
 
 def createApp(
@@ -341,7 +369,11 @@ def createApp(
     @app.post("/auth/login", response_model=LoginResponse)
     def login(loginRequest: LoginRequest, request: Request):
         clientIp = request.client.host if request.client else "unknown"
-        rateLimitKey = _buildRateLimitKey(clientIp=clientIp, email=loginRequest.email)
+        rateLimitKey = _buildRateLimitKey(
+            clientIp=clientIp,
+            email=loginRequest.email,
+            scope="auth_login",
+        )
         now = app.state.nowProvider()
 
         if not app.state.rateLimiter.allow(key=rateLimitKey, now=now):
@@ -378,16 +410,68 @@ def createApp(
         )
         return LoginResponse(success=True, message=authResult.message)
 
-    @app.post("/rf07/password-reset/request", response_model=RequestPasswordResetResponse)
-    def requestPasswordReset(requestBody: RequestPasswordResetBody):
+    @app.post(
+        "/auth/password-reset/request",
+        response_model=RequestPasswordResetResponse,
+        responses={429: {"model": ErrorResponse}},
+    )
+    def requestPasswordReset(requestBody: RequestPasswordResetRequest, request: Request):
+        clientIp = request.client.host if request.client else "unknown"
+        rateLimitKey = _buildRateLimitKey(
+            clientIp=clientIp,
+            email=requestBody.email,
+            scope="auth_password_reset_request",
+        )
+        now = app.state.nowProvider()
+
+        if not app.state.rateLimiter.allow(key=rateLimitKey, now=now):
+            logger.warning(
+                "evento=rf07_password_reset_rate_limited ip=%s email_hash=%s",
+                clientIp,
+                _minimizeEmailIdentifier(requestBody.email),
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"success": False, "message": RATE_LIMIT_EXCEDIDO},
+            )
+
         app.state.rf07Service.requestPasswordReset(requestBody.email)
         logger.info(
-            "evento=rf07_password_reset_requested email_hash=%s",
+            "evento=rf07_password_reset_requested ip=%s email_hash=%s",
+            clientIp,
             _minimizeEmailIdentifier(requestBody.email),
         )
         return RequestPasswordResetResponse(
             success=True,
             message="se a conta existir, enviaremos instruções por e-mail",
+        )
+
+    @app.post(
+        "/auth/password-reset/confirm",
+        response_model=ConfirmPasswordResetResponse,
+        responses={400: {"model": ErrorResponse}},
+    )
+    def confirmPasswordReset(requestBody: ConfirmPasswordResetRequest, request: Request):
+        clientIp = request.client.host if request.client else "unknown"
+        try:
+            app.state.rf07Service.confirmPasswordReset(
+                token=requestBody.token,
+                newPassword=requestBody.newPassword,
+            )
+        except ValueError:
+            logger.warning(
+                "evento=rf07_password_reset_confirm_fail ip=%s",
+                clientIp,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "credenciais inválidas"},
+            )
+
+        logger.info("evento=rf07_password_reset_confirm_success ip=%s", clientIp)
+        return ConfirmPasswordResetResponse(
+            success=True,
+            message="senha redefinida com sucesso",
         )
 
     @app.post(
