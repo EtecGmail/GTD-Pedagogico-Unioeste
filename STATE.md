@@ -244,3 +244,26 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Expandir auditoria técnica para consolidar padronização de erros de domínio (evitar vazamento de exceções de infraestrutura para chamadas internas).
 - Planejar provider de sessão/token persistente com TTL/revogação e integração com persistência compartilhada.
+
+- **27/03/2026 (hardening auth / tradução de erro de infraestrutura em erro de domínio)** – Ajuste pontual via TDD estrito para eliminar vazamento de `sqlite3.IntegrityError` no `AuthService.register_user` em caso de duplicidade de e-mail. Primeiro foram criados testes unitários em `tests/test_auth.py` cobrindo: (1) duplicidade de e-mail como erro de domínio consistente, (2) mensagem estável e desacoplada de detalhes internos, e (3) garantia de não propagação de `sqlite3.IntegrityError`. Na implementação mínima, `AuthService` recebeu exceções de domínio explícitas e reutilizáveis (`DomainError` e `DuplicateEmailError`) e passou a traduzir `sqlite3.IntegrityError` para `DuplicateEmailError` com mensagem limpa (`EMAIL_JA_CADASTRADO`). Para manter compatibilidade da base atual, o helper de autenticação de `tests/test_persistence.py` foi atualizado para aceitar a nova exceção de domínio quando o usuário já existir em banco compartilhado.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/auth.py`
+- `tests/test_auth.py`
+- `tests/test_persistence.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_auth.py -k duplicado` (falha esperada no TDD antes da implementação: `ImportError` por símbolos de domínio ainda inexistentes).
+- `poetry run pytest -q tests/test_auth.py` (sucesso após implementação: `8 passed`).
+- `poetry run pytest -q` (falha inicial de regressão em `tests/test_persistence.py` devido à nova exceção de domínio; sucesso após ajuste de compatibilidade no teste).
+- `poetry run pytest -q tests/test_auth.py tests/test_persistence.py` (sucesso: `9 passed`).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+
+### Problemas/riscos remanescentes
+- A camada HTTP não foi alterada nesta task (escopo intencional); se houver necessidade de padronização de payload/erro público para cadastro, isso deve ser tratado em iteração dedicada sem quebrar contrato externo.
+- O fluxo de sessão Bearer continua com storage em memória por processo; para produção/multi-instância ainda é necessário backend compartilhado com TTL/revogação.
+
+### Próximos passos
+- Reaproveitar o padrão de exceção de domínio em outros pontos onde exceções de infraestrutura ainda possam vazar para chamadas internas.
+- Seguir para RF-09 e RF-10 com a base de erro de domínio em autenticação já padronizada.

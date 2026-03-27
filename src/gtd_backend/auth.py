@@ -5,6 +5,15 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 
 CREDENCIAIS_INVALIDAS = "credenciais inválidas"
+EMAIL_JA_CADASTRADO = "e-mail já cadastrado"
+
+
+class DomainError(Exception):
+    """Erro de domínio para regras de autenticação."""
+
+
+class DuplicateEmailError(DomainError):
+    """Erro de domínio para tentativa de cadastro com e-mail já existente."""
 
 
 @dataclass(frozen=True)
@@ -50,10 +59,13 @@ class AuthService:
 
     def register_user(self, email: str, plain_password: str) -> int:
         passwordHash = self.passwordHasher.hash(plain_password)
-        cursor = self.connection.execute(
-            "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-            (email.lower().strip(), passwordHash),
-        )
+        try:
+            cursor = self.connection.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                (email.lower().strip(), passwordHash),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DuplicateEmailError(EMAIL_JA_CADASTRADO) from error
         self.connection.commit()
         return int(cursor.lastrowid)
 

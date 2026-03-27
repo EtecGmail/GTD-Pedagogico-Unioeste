@@ -3,13 +3,14 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
+from gtd_backend.auth import DuplicateEmailError
 from gtd_backend.http import createApp
 
 
 def _autenticarUsuario(client: TestClient, app, email: str) -> dict[str, str]:
     try:
         app.state.authService.register_user(email, "SenhaForte123")
-    except (ValueError, sqlite3.IntegrityError):
+    except (ValueError, DuplicateEmailError, sqlite3.IntegrityError):
         pass
     respostaLogin = client.post(
         "/auth/login",
