@@ -119,3 +119,58 @@ def test_login_http_deve_logar_eventos_sem_dados_sensiveis(caplog) -> None:
     assert "evento=auth_login_fail" in mensagens
     assert "SenhaSuperSecreta" not in mensagens
     assert "naoexiste@unioeste.br" not in mensagens
+
+
+def test_rf07_request_http_deve_enfileirar_email_apenas_quando_conta_existe() -> None:
+    app = createApp()
+    client = TestClient(app)
+
+    respostaSemConta = client.post(
+        "/rf07/password-reset/request",
+        json={"email": "inexistente@unioeste.br"},
+    )
+    assert respostaSemConta.status_code == 200
+    assert app.state.rf07EmailSender.queuedMessages == []
+
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+    respostaComConta = client.post(
+        "/rf07/password-reset/request",
+        json={"email": "aluna@unioeste.br"},
+    )
+    assert respostaComConta.status_code == 200
+    assert len(app.state.rf07EmailSender.queuedMessages) == 1
+
+
+def test_rf07_request_http_nao_deve_expor_token_na_resposta() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+
+    resposta = client.post(
+        "/rf07/password-reset/request",
+        json={"email": "aluna@unioeste.br"},
+    )
+
+    assert resposta.status_code == 200
+    corpo = resposta.json()
+    assert corpo == {
+        "success": True,
+        "message": "se a conta existir, enviaremos instruções por e-mail",
+    }
+    assert "token" not in str(corpo).lower()
+
+
+def test_rf07_request_http_nao_deve_logar_senha_ou_token(caplog) -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+
+    caplog.set_level(logging.INFO)
+    client.post("/rf07/password-reset/request", json={"email": "aluna@unioeste.br"})
+
+    mensagens = " ".join(registro.getMessage() for registro in caplog.records)
+    token = app.state.rf07EmailSender.queuedMessages[0]["resetToken"]
+    assert "evento=rf07_password_reset_requested" in mensagens
+    assert "SenhaForte123" not in mensagens
+    assert token not in mensagens
+    assert "aluna@unioeste.br" not in mensagens
