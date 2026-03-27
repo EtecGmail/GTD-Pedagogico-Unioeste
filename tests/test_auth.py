@@ -50,3 +50,20 @@ def test_deve_usar_hash_falso_quando_usuario_nao_existe() -> None:
     auth.login("naoexiste@unioeste.br", "SenhaQualquer123")
 
     assert hashesVerificados == [auth.dummyHash]
+
+
+def test_deve_atualizar_hash_e_permitir_login_com_nova_senha() -> None:
+    auth = AuthService()
+    userId = auth.register_user("troca@unioeste.br", "SenhaAntiga123")
+    hashAntigo = auth.get_password_hash(userId)
+
+    auth.updatePassword(userId, "SenhaNova123")
+
+    hashNovo = auth.get_password_hash(userId)
+    loginComNovaSenha = auth.login("troca@unioeste.br", "SenhaNova123")
+    loginComSenhaAntiga = auth.login("troca@unioeste.br", "SenhaAntiga123")
+
+    assert hashNovo != hashAntigo
+    assert hashNovo.startswith("$argon2id$")
+    assert loginComNovaSenha == AuthResult(success=True, message="login realizado com sucesso")
+    assert loginComSenhaAntiga == AuthResult(success=False, message=CREDENCIAIS_INVALIDAS)
