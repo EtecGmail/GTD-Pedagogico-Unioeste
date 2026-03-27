@@ -22,6 +22,7 @@ from gtd_backend.rf05 import RF05Service
 from gtd_backend.rf06 import RF06Service
 from gtd_backend.rf07 import InMemoryPasswordResetEmailSender, RF07Service
 from gtd_backend.rf08 import RF08Service
+from gtd_backend.rf09 import SecurityEventService
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -372,6 +373,10 @@ def _buildRateLimitKey(clientIp: str, email: str, scope: str = "default") -> str
     return f"scope:{scope}|ip:{clientIp}|email:{minimizedEmail}"
 
 
+def _minimizeIpIdentifier(clientIp: str) -> str:
+    return hashlib.sha256(clientIp.encode("utf-8")).hexdigest()[:12]
+
+
 def createApp(
     rateLimiter: RateLimiter | None = None,
     nowProvider: Callable[[], float] | None = None,
@@ -402,6 +407,7 @@ def createApp(
         nowProvider=lambda: datetime.now().astimezone(),
         connection=app.state.dbConnection,
     )
+    app.state.rf09Service = SecurityEventService(connection=app.state.dbConnection)
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.sessionStore = InMemorySessionStore()
     app.state.nowProvider = nowProvider or time.time
@@ -421,13 +427,26 @@ def createApp(
         return normalizedToken
 
     def getCurrentUser(
+        request: Request,
         authorization: str | None = Header(default=None, alias="Authorization"),
     ) -> CurrentUser:
         accessToken = _extractBearerToken(authorization)
         if accessToken is None:
+            clientIp = request.client.host if request.client else "unknown"
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                metadata={"reason": "missing_or_invalid_token", "ipHash": _minimizeIpIdentifier(clientIp)},
+            )
             raise HTTPException(status_code=401, detail="não autenticado")
         userId = app.state.sessionStore.resolveUserId(accessToken=accessToken)
         if userId is None:
+            clientIp = request.client.host if request.client else "unknown"
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                metadata={"reason": "invalid_session", "ipHash": _minimizeIpIdentifier(clientIp)},
+            )
             raise HTTPException(status_code=401, detail="não autenticado")
         return CurrentUser(userId=userId)
 
@@ -442,6 +461,15 @@ def createApp(
         now = app.state.nowProvider()
 
         if not app.state.rateLimiter.allow(key=rateLimitKey, now=now):
+            app.state.rf09Service.recordEvent(
+                eventType="auth_login_rate_limit",
+                result="blocked",
+                metadata={
+                    "emailHash": _minimizeEmailIdentifier(loginRequest.email),
+                    "ipHash": _minimizeIpIdentifier(clientIp),
+                    "scope": "auth_login",
+                },
+            )
             logger.warning(
                 "evento=auth_login_rate_limited ip=%s email_hash=%s",
                 clientIp,
@@ -458,6 +486,14 @@ def createApp(
         )
 
         if not authResult.success:
+            app.state.rf09Service.recordEvent(
+                eventType="auth_login",
+                result="failure",
+                metadata={
+                    "emailHash": _minimizeEmailIdentifier(loginRequest.email),
+                    "ipHash": _minimizeIpIdentifier(clientIp),
+                },
+            )
             logger.info(
                 "evento=auth_login_fail ip=%s email_hash=%s",
                 clientIp,
@@ -479,6 +515,15 @@ def createApp(
                 status_code=401,
                 content={"success": False, "message": "credenciais inválidas"},
             )
+        app.state.rf09Service.recordEvent(
+            eventType="auth_login",
+            result="success",
+            userId=int(user["id"]),
+            metadata={
+                "emailHash": _minimizeEmailIdentifier(loginRequest.email),
+                "ipHash": _minimizeIpIdentifier(clientIp),
+            },
+        )
         accessToken = app.state.sessionStore.createSession(userId=int(user["id"]))
         return LoginResponse(
             success=True,
@@ -502,6 +547,14 @@ def createApp(
         now = app.state.nowProvider()
 
         if not app.state.rateLimiter.allow(key=rateLimitKey, now=now):
+            app.state.rf09Service.recordEvent(
+                eventType="password_reset_request_rate_limit",
+                result="blocked",
+                metadata={
+                    "emailHash": _minimizeEmailIdentifier(requestBody.email),
+                    "ipHash": _minimizeIpIdentifier(clientIp),
+                },
+            )
             logger.warning(
                 "evento=rf07_password_reset_rate_limited ip=%s email_hash=%s",
                 clientIp,
@@ -513,6 +566,16 @@ def createApp(
             )
 
         app.state.rf07Service.requestPasswordReset(requestBody.email)
+        user = app.state.authService.findUserByEmail(requestBody.email)
+        app.state.rf09Service.recordEvent(
+            eventType="password_reset_request",
+            result="success",
+            userId=int(user["id"]) if user is not None else None,
+            metadata={
+                "emailHash": _minimizeEmailIdentifier(requestBody.email),
+                "ipHash": _minimizeIpIdentifier(clientIp),
+            },
+        )
         logger.info(
             "evento=rf07_password_reset_requested ip=%s email_hash=%s",
             clientIp,
@@ -536,6 +599,11 @@ def createApp(
                 newPassword=requestBody.newPassword,
             )
         except ValueError:
+            app.state.rf09Service.recordEvent(
+                eventType="password_reset_confirm",
+                result="failure",
+                metadata={"ipHash": _minimizeIpIdentifier(clientIp)},
+            )
             logger.warning(
                 "evento=rf07_password_reset_confirm_fail ip=%s",
                 clientIp,
@@ -546,6 +614,11 @@ def createApp(
             )
 
         logger.info("evento=rf07_password_reset_confirm_success ip=%s", clientIp)
+        app.state.rf09Service.recordEvent(
+            eventType="password_reset_confirm",
+            result="success",
+            metadata={"ipHash": _minimizeIpIdentifier(clientIp)},
+        )
         return ConfirmPasswordResetResponse(
             success=True,
             message="senha redefinida com sucesso",
@@ -654,6 +727,15 @@ def createApp(
                 userId=currentUser.userId,
             )
         except LookupError as error:
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                userId=currentUser.userId,
+                metadata={
+                    "resource": "rf06_inbox_item_status",
+                    "itemId": itemId,
+                },
+            )
             return JSONResponse(
                 status_code=404,
                 content={"success": False, "message": str(error)},
@@ -727,6 +809,12 @@ def createApp(
         try:
             fileContent = b64decode(request.contentBase64, validate=True)
         except Exception:
+            app.state.rf09Service.recordEvent(
+                eventType="certificate_upload_rejected",
+                result="rejected",
+                userId=currentUser.userId,
+                metadata={"reason": "invalid_base64_payload"},
+            )
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": "payload de arquivo inválido"},
@@ -741,6 +829,16 @@ def createApp(
                 userId=currentUser.userId,
             )
         except ValueError as error:
+            app.state.rf09Service.recordEvent(
+                eventType="certificate_upload_rejected",
+                result="rejected",
+                userId=currentUser.userId,
+                metadata={
+                    "reason": str(error),
+                    "contentType": request.contentType,
+                    "originalName": request.originalName,
+                },
+            )
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": str(error)},
@@ -796,6 +894,15 @@ def createApp(
                 userId=currentUser.userId,
             )
         except LookupError as error:
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                userId=currentUser.userId,
+                metadata={
+                    "resource": "rf08_reading_plan_advance",
+                    "planId": planId,
+                },
+            )
             return JSONResponse(
                 status_code=404,
                 content={"success": False, "message": str(error)},

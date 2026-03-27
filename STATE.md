@@ -20,9 +20,9 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | RF-06 | Categorização em "Próximas Ações" e "Aguardando" | done | Codex | RF-06 implementado via TDD com transição explícita (`inbox -> next_action|waiting`), rejeição de transições inválidas e endpoints mínimos para atualização/listagem por status. |
 | RF-07 | Recuperação de senha via e‑mail | done | Codex | RF-07 finalizado via TDD com tokens temporários hasheados, fluxo cego na solicitação e confirmação com Argon2id + invalidação por uso/expiração. |
 | RF-08 | Gráficos de avanço das leituras | done | Codex | Base backend-first implementada via TDD com agregação de dashboard e endpoint mínimo de avanço de leitura. |
-| RF-09 | Log de eventos de segurança | todo | — | — |
+| RF-09 | Log de eventos de segurança | done | Codex | RF-09 implementado via TDD com `SecurityEventService`, persistência simples em SQLite compartilhado e registro seguro de eventos críticos de autenticação/autorização/upload. |
 | RF-10 | Alerta de 90 % de cota de armazenamento | todo | — | — |
-| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-07 e validações executadas. |
+| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-09 e validações executadas. |
 
 ## Histórico
 
@@ -267,3 +267,25 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Reaproveitar o padrão de exceção de domínio em outros pontos onde exceções de infraestrutura ainda possam vazar para chamadas internas.
 - Seguir para RF-09 e RF-10 com a base de erro de domínio em autenticação já padronizada.
+
+
+- **27/03/2026 (fase 3 / rf-09, log de eventos de segurança)** – Implementação do RF-09 via TDD estrito com abordagem mínima e sustentável. Primeiro foram escritos testes de integração em `tests/test_rf09.py` cobrindo os eventos obrigatórios: login com sucesso, login inválido, bloqueio por rate limit, solicitação de reset de senha, confirmação de reset, acesso negado por ownership/autorização e upload inválido/rejeitado. Em seguida, foi implementado `SecurityEventService` (`src/gtd_backend/rf09.py`) com schema simples (`event_type`, `timestamp`, `result`, `user_id`, `metadata`), persistência na conexão compartilhada e sanitização explícita de metadados para bloquear campos sensíveis (`password`, `token`, `contentBase64`, `email` bruto, etc.). Por fim, o `http.py` foi integrado para registrar eventos nos fluxos de autenticação, recuperação de senha, negação de acesso e rejeição de upload, mantendo rastreabilidade útil com hashes reduzidos de IP/e-mail. Nesta etapa, **não foi criado endpoint administrativo** para consulta de logs, por decisão de escopo mínimo seguro; a leitura foi mantida no serviço interno e validada por testes. Suíte final: `93 passed`.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/rf09.py`
+- `src/gtd_backend/http.py`
+- `tests/test_rf09.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf09.py` (falha inicial esperada no TDD antes da implementação; sucesso após implementação: `6 passed`).
+- `poetry run pytest -q` (sucesso: `93 passed`).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- O log de segurança já persiste eventos relevantes com metadados mínimos, mas ainda não possui endpoint administrativo dedicado com autenticação de perfil admin; isso deve ser avaliado em iteração futura com política explícita de autorização e retenção.
+- A sessão Bearer continua em memória por processo; em ambiente distribuído, a rastreabilidade de segurança ficará mais robusta com backend de sessão compartilhado e TTL/revogação centralizados.
+
+### Próximos passos
+- Definir política de auditoria administrativa (RBAC, paginação, retenção e exportação) antes de expor endpoint de consulta de eventos.
+- Reutilizar `SecurityEventService` para cobrir RF-10 e futuras detecções de abuso/anomalia sem vazar dados sensíveis.
