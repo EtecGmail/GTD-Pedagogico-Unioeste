@@ -106,3 +106,11 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 1. Evoluir a borda HTTP de autenticação com rate limit desacoplado (abstração de storage) e logging de segurança sem dados sensíveis; honeypot fica reservado para formulários HTML, não para API JSON pura.
 2. Configurar CI/CD para rodar testes automaticamente a cada commit/pull request.
 3. Iniciar RF‑01 e RF‑02 mantendo cobertura de testes >90%.
+
+## Decisão estrutural relevante (27/03/2026)
+
+- Consolidar a persistência do backend em **conexão compartilhada por aplicação** (em vez de SQLite isolado por serviço).
+- Estratégia de compatibilidade:
+  - **Testes**: `sqlite:///:memory:` para isolamento e velocidade.
+  - **Desenvolvimento**: `sqlite:///./<arquivo>.db` para persistência entre reinícios.
+  - **Produção**: manter serviços desacoplados da origem da conexão para permitir `PostgreSQL` por provider específico sem refatoração ampla de domínio.

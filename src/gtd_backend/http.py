@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gtd_backend.auth import AuthService
+from gtd_backend.persistence import DEFAULT_DATABASE_URL, createSqliteConnection
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
@@ -343,13 +344,19 @@ def _buildRateLimitKey(clientIp: str, email: str, scope: str = "default") -> str
 def createApp(
     rateLimiter: RateLimiter | None = None,
     nowProvider: Callable[[], float] | None = None,
+    databaseUrl: str = DEFAULT_DATABASE_URL,
 ) -> FastAPI:
     app = FastAPI(title="GTD Pedagógico Unioeste")
-    app.state.authService = AuthService()
-    app.state.rf01Service = RF01Service()
-    app.state.rf02Service = RF02Service()
-    app.state.rf03Service = RF03Service()
-    app.state.rf04Service = RF04Service(storage=InMemoryCertificateStorage())
+    app.state.databaseUrl = databaseUrl
+    app.state.dbConnection = createSqliteConnection(databaseUrl=databaseUrl)
+    app.state.authService = AuthService(connection=app.state.dbConnection)
+    app.state.rf01Service = RF01Service(connection=app.state.dbConnection)
+    app.state.rf02Service = RF02Service(connection=app.state.dbConnection)
+    app.state.rf03Service = RF03Service(connection=app.state.dbConnection)
+    app.state.rf04Service = RF04Service(
+        storage=InMemoryCertificateStorage(),
+        connection=app.state.dbConnection,
+    )
     app.state.rf05Service = RF05Service(rf04Service=app.state.rf04Service, defaultTargetHours=200)
     app.state.rf06Service = RF06Service(rf02Service=app.state.rf02Service)
     app.state.rf08Service = RF08Service(
@@ -362,6 +369,7 @@ def createApp(
         authService=app.state.authService,
         emailSender=app.state.rf07EmailSender,
         nowProvider=lambda: datetime.now().astimezone(),
+        connection=app.state.dbConnection,
     )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time

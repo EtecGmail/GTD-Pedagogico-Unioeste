@@ -3,8 +3,8 @@ from collections.abc import Sequence
 
 
 class RF01Service:
-    def __init__(self) -> None:
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+        self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._setupSchema()
 

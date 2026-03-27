@@ -50,8 +50,9 @@ class RF04Service:
         self,
         storage: CertificateStorage,
         nowProvider: Callable[[], datetime] | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+        self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.storage = storage
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))

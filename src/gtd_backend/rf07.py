@@ -33,12 +33,13 @@ class RF07Service:
         emailSender: PasswordResetEmailSender,
         nowProvider: callable,
         tokenTtlHours: int = 1,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         self.authService = authService
         self.emailSender = emailSender
         self.nowProvider = nowProvider
         self.tokenTtlHours = tokenTtlHours
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+        self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._setupSchema()
 

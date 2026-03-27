@@ -5,8 +5,12 @@ from datetime import UTC, datetime
 
 
 class RF03Service:
-    def __init__(self, nowProvider: Callable[[], datetime] | None = None) -> None:
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+    def __init__(
+        self,
+        nowProvider: Callable[[], datetime] | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
         self._setupSchema()
