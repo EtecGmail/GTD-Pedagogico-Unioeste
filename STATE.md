@@ -47,22 +47,18 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - **27/03/2026 (fase 3 / rf-08, backend-first)** – Implementação da base do RF-08 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para agregação do dashboard do estudante e para avanço de leitura, cobrindo cenários com e sem dados, validação explícita e rejeição de plano inexistente. Em seguida, foi implementado `RF08Service` reutilizando RF-06 (contagens por status), RF-05 (progresso de ACC) e RF-03 (resumo de leitura). Também foi estendido o `RF03Service` com `advanceReadingPlan` para atualização controlada de `remainingPages`. Por fim, endpoints mínimos foram adicionados em FastAPI: `GET /rf08/dashboard` e `PATCH /rf08/reading-plans/{planId}/advance`. Suíte final: `52 passed`.
 
 - **27/03/2026 (fase 3 / rf-07)** – Implementação do RF-07 via TDD estrito. Primeiro foram criados testes de serviço para schema SQLite mínimo de tokens de redefinição, comportamento cego para usuário inexistente, persistência apenas de hash do token, expiração e invalidação por uso. Em seguida, foi implementado `RF07Service` com dependências injetáveis (`authService`, `emailSender`, `nowProvider`), geração criptograficamente segura de token (`secrets.token_urlsafe`) e confirmação com atualização de senha via Argon2id reaproveitando o hasher do `AuthService`. Por fim, o `AuthService` foi estendido com operações explícitas para localizar usuário por e-mail e atualizar hash de senha por ID. Suíte final: `58 passed`.
-- **27/03/2026 (fase 3 / rf-07, porta de e-mail + endpoint HTTP)** – Refino de arquitetura orientado a portas/adaptadores no RF-07. Foi definido o protocolo `PasswordResetEmailSender` e criada a implementação de teste `InMemoryPasswordResetEmailSender` para enfileirar mensagens com `toEmail`, `resetToken` e `expiresAt`. O `RF07Service` passou a depender exclusivamente da interface, removendo fallback dinâmico por introspecção de métodos. Também foi adicionado endpoint `POST /rf07/password-reset/request` com resposta genérica (sem token), mantendo comportamento cego para conta inexistente e logging sem dados sensíveis. A validação automatizada deste ciclo ficou bloqueada por dependências ausentes no ambiente (`argon2` e `fastapi`).
+- **27/03/2026 (fase 3 / rf-07, hardening HTTP)** – Endurecimento do fluxo HTTP de recuperação de senha via TDD. Primeiro foram escritos/atualizados testes para rotas públicas em `/auth/password-reset/*`, cobrindo resposta cega na solicitação, confirmação com sucesso e erro genérico (`400`) para token inválido/usado, validação com `extra="forbid"` e mitigação de abuso (`429`) por rate limit. Em seguida, `http.py` foi ajustado com novos modelos Pydantic (`RequestPasswordResetRequest` e `ConfirmPasswordResetRequest`), endpoints `POST /auth/password-reset/request` e `POST /auth/password-reset/confirm`, e logs sem vazamento de e-mail bruto/token/senha (somente `email_hash` reduzido). Também foi aplicado escopo de rate limit dedicado para isolar login e reset de senha. Validação final concluída com sucesso (`65 passed`).
 
 ### Arquivos modificados no ciclo atual
-- `src/gtd_backend/auth.py`
-- `src/gtd_backend/rf07.py`
 - `src/gtd_backend/http.py`
 - `tests/test_auth_http.py`
-- `tests/test_rf07.py`
 - `STATE.md`
 
 ### Comandos executados e resultados
-- `poetry run pytest -q tests/test_rf07.py` (falha esperada no ciclo TDD após criação dos testes: `ModuleNotFoundError: No module named 'gtd_backend.rf07'`).
-- `poetry run pytest -q tests/test_rf07.py` (sucesso após implementação incremental do serviço: `6 passed`).
-- `poetry run pytest -q` (sucesso: `58 passed`).
+- `pytest -q tests/test_auth_http.py` (falha de ambiente esperada fora do Poetry: `ModuleNotFoundError: No module named 'fastapi'`).
+- `poetry run pytest -q tests/test_auth_http.py` (sucesso: `14 passed`).
+- `poetry run pytest -q` (sucesso: `65 passed`).
 - `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
-- `pytest -q tests/test_rf07.py tests/test_auth_http.py` (falha de ambiente: `ModuleNotFoundError: No module named 'argon2'` e `ModuleNotFoundError: No module named 'fastapi'`).
 
 ### Problemas/riscos remanescentes
 - `RF01Service` usa SQLite em memória por instância de aplicação; ao evoluir para ambiente persistente/multi-instância será necessário repositório compartilhado (PostgreSQL).
@@ -77,7 +73,7 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 
 ### Próximos passos
 - Evoluir RF-08 para série temporal de avanço de leitura (gráfico dinâmico real), mantendo o endpoint agregado já entregue.
-- Expor endpoints HTTP de recuperação de senha (solicitação/confirmação) com proteção adicional de rate limit por IP e auditoria mínima sem dados sensíveis.
+- Considerar expansão de mitigação antiabuso no RF-07 com buckets adicionais por IP puro (sem e-mail) e backoff progressivo para padrões de ataque distribuído.
 - Evoluir `CertificateStorage` para provider persistente com criptografia em repouso (RNF-01), mantendo contrato atual.
 - Planejar migração do endpoint de upload para `multipart/form-data` com suporte mobile/câmera e validação de assinatura mágica de arquivo (defesa em profundidade).
 - Definir camada de persistência compartilhada para evitar múltiplos bancos em memória por serviço conforme avanço da fase 3.
