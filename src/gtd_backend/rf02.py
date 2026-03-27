@@ -62,19 +62,36 @@ class RF02Service:
             raise ValueError("status inválido")
         return normalizedStatus
 
-    def changeInboxItemStatus(self, itemId: int, targetStatus: str) -> dict[str, int | str]:
+    def changeInboxItemStatus(
+        self,
+        itemId: int,
+        targetStatus: str,
+        userId: int | None = None,
+    ) -> dict[str, int | str]:
         normalizedTargetStatus = self._normalizeStatus(targetStatus)
         if normalizedTargetStatus == "inbox":
             raise ValueError("status de destino inválido")
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário da atualização é inválido")
 
-        row = self.connection.execute(
-            """
-            SELECT id, status
-            FROM inbox_items
-            WHERE id = ?
-            """,
-            (itemId,),
-        ).fetchone()
+        if userId is None:
+            row = self.connection.execute(
+                """
+                SELECT id, status
+                FROM inbox_items
+                WHERE id = ?
+                """,
+                (itemId,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                """
+                SELECT id, status
+                FROM inbox_items
+                WHERE id = ? AND user_id = ?
+                """,
+                (itemId, userId),
+            ).fetchone()
 
         if row is None:
             raise LookupError("item da caixa de entrada não encontrado")
@@ -83,14 +100,24 @@ class RF02Service:
         if currentStatus != "inbox":
             raise ValueError("transição de status inválida")
 
-        self.connection.execute(
-            """
-            UPDATE inbox_items
-            SET status = ?
-            WHERE id = ?
-            """,
-            (normalizedTargetStatus, itemId),
-        )
+        if userId is None:
+            self.connection.execute(
+                """
+                UPDATE inbox_items
+                SET status = ?
+                WHERE id = ?
+                """,
+                (normalizedTargetStatus, itemId),
+            )
+        else:
+            self.connection.execute(
+                """
+                UPDATE inbox_items
+                SET status = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (normalizedTargetStatus, itemId, userId),
+            )
         self.connection.commit()
 
         return {"id": itemId, "status": normalizedTargetStatus}

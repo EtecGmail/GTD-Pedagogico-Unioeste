@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ from datetime import datetime
 
 from base64 import b64decode
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,6 +46,8 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     success: bool
     message: str
+    accessToken: str | None = None
+    tokenType: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -332,6 +335,34 @@ class MemoryRateLimiter(RateLimiter):
         return True
 
 
+class SessionStore:
+    def createSession(self, userId: int) -> str:
+        raise NotImplementedError
+
+    def resolveUserId(self, accessToken: str) -> int | None:
+        raise NotImplementedError
+
+
+class InMemorySessionStore(SessionStore):
+    def __init__(self) -> None:
+        self._tokenToUserId: dict[str, int] = {}
+
+    def createSession(self, userId: int) -> str:
+        if userId <= 0:
+            raise ValueError("usuário inválido")
+        accessToken = secrets.token_urlsafe(32)
+        self._tokenToUserId[accessToken] = userId
+        return accessToken
+
+    def resolveUserId(self, accessToken: str) -> int | None:
+        return self._tokenToUserId.get(accessToken)
+
+
+@dataclass(frozen=True)
+class CurrentUser:
+    userId: int
+
+
 def _minimizeEmailIdentifier(email: str) -> str:
     return hashlib.sha256(email.encode("utf-8")).hexdigest()[:12]
 
@@ -372,7 +403,33 @@ def createApp(
         connection=app.state.dbConnection,
     )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
+    app.state.sessionStore = InMemorySessionStore()
     app.state.nowProvider = nowProvider or time.time
+
+    def _extractBearerToken(authorizationHeader: str | None) -> str | None:
+        if authorizationHeader is None:
+            return None
+        headerParts = authorizationHeader.strip().split(" ", 1)
+        if len(headerParts) != 2:
+            return None
+        authScheme, accessToken = headerParts
+        if authScheme.lower() != "bearer":
+            return None
+        normalizedToken = accessToken.strip()
+        if len(normalizedToken) < 20:
+            return None
+        return normalizedToken
+
+    def getCurrentUser(
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> CurrentUser:
+        accessToken = _extractBearerToken(authorization)
+        if accessToken is None:
+            raise HTTPException(status_code=401, detail="não autenticado")
+        userId = app.state.sessionStore.resolveUserId(accessToken=accessToken)
+        if userId is None:
+            raise HTTPException(status_code=401, detail="não autenticado")
+        return CurrentUser(userId=userId)
 
     @app.post("/auth/login", response_model=LoginResponse)
     def login(loginRequest: LoginRequest, request: Request):
@@ -416,7 +473,19 @@ def createApp(
             clientIp,
             _minimizeEmailIdentifier(loginRequest.email),
         )
-        return LoginResponse(success=True, message=authResult.message)
+        user = app.state.authService.findUserByEmail(loginRequest.email)
+        if user is None:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "credenciais inválidas"},
+            )
+        accessToken = app.state.sessionStore.createSession(userId=int(user["id"]))
+        return LoginResponse(
+            success=True,
+            message=authResult.message,
+            accessToken=accessToken,
+            tokenType="Bearer",
+        )
 
     @app.post(
         "/auth/password-reset/request",
@@ -535,9 +604,15 @@ def createApp(
         status_code=201,
         responses={400: {"model": ErrorResponse}},
     )
-    def captureInboxItem(request: CreateInboxItemRequest):
+    def captureInboxItem(
+        request: CreateInboxItemRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
-            inboxItemId = app.state.rf02Service.captureInboxItem(content=request.content)
+            inboxItemId = app.state.rf02Service.captureInboxItem(
+                content=request.content,
+                userId=currentUser.userId,
+            )
         except ValueError as error:
             return JSONResponse(
                 status_code=400,
@@ -545,21 +620,30 @@ def createApp(
             )
         return CreateInboxItemResponse(id=inboxItemId)
 
-    @app.get("/rf02/inbox-items", response_model=list[InboxItemListResponse])
-    def listInboxItems():
-        return app.state.rf02Service.listInboxItems()
+    @app.get(
+        "/rf02/inbox-items",
+        response_model=list[InboxItemListResponse],
+        responses={401: {"model": ErrorResponse}},
+    )
+    def listInboxItems(currentUser: CurrentUser = Depends(getCurrentUser)):
+        return app.state.rf02Service.listInboxItems(userId=currentUser.userId)
 
 
     @app.patch(
         "/rf06/inbox-items/{itemId}/status",
         response_model=UpdateInboxItemStatusResponse,
-        responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+        responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     )
-    def changeInboxItemStatus(itemId: int, request: UpdateInboxItemStatusRequest):
+    def changeInboxItemStatus(
+        itemId: int,
+        request: UpdateInboxItemStatusRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             updatedItem = app.state.rf06Service.changeInboxItemStatus(
                 itemId=itemId,
                 targetStatus=request.status,
+                userId=currentUser.userId,
             )
         except LookupError as error:
             return JSONResponse(
@@ -573,10 +657,20 @@ def createApp(
             )
         return UpdateInboxItemStatusResponse(**updatedItem)
 
-    @app.get("/rf06/inbox-items", response_model=list[InboxItemListResponse])
-    def listInboxItemsByStatus(status: str = Query(default="inbox")):
+    @app.get(
+        "/rf06/inbox-items",
+        response_model=list[InboxItemListResponse],
+        responses={401: {"model": ErrorResponse}},
+    )
+    def listInboxItemsByStatus(
+        status: str = Query(default="inbox"),
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
-            return app.state.rf06Service.listInboxItems(status=status)
+            return app.state.rf06Service.listInboxItems(
+                status=status,
+                userId=currentUser.userId,
+            )
         except ValueError as error:
             return JSONResponse(
                 status_code=400,

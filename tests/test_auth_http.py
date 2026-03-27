@@ -84,10 +84,47 @@ def test_login_http_deve_retornar_sucesso_para_credenciais_validas() -> None:
     )
 
     assert resposta.status_code == 200
-    assert resposta.json() == {
-        "success": True,
-        "message": "login realizado com sucesso",
-    }
+    corpoResposta = resposta.json()
+    assert corpoResposta["success"] is True
+    assert corpoResposta["message"] == "login realizado com sucesso"
+    assert isinstance(corpoResposta["accessToken"], str)
+    assert len(corpoResposta["accessToken"]) >= 20
+    assert corpoResposta["tokenType"] == "Bearer"
+
+
+def test_login_http_deve_emitir_credencial_que_autentica_requisicao_protegida() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+
+    respostaLogin = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    )
+    token = respostaLogin.json()["accessToken"]
+
+    respostaCaptura = client.post(
+        "/rf02/inbox-items",
+        json={"content": "Ler artigo de alfabetização"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respostaCaptura.status_code == 201
+
+    respostaListagem = client.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respostaListagem.status_code == 200
+    assert len(respostaListagem.json()) == 1
+
+
+def test_rf02_http_deve_rejeitar_requisicao_sem_autenticacao() -> None:
+    app = createApp()
+    client = TestClient(app)
+
+    respostaSemToken = client.get("/rf02/inbox-items")
+    assert respostaSemToken.status_code == 401
+    assert respostaSemToken.json() == {"detail": "não autenticado"}
 
 
 def test_login_http_deve_validar_entradas_invalidas() -> None:
