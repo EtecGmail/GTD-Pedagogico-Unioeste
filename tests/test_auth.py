@@ -1,4 +1,14 @@
-from gtd_backend.auth import AuthService, AuthResult, CREDENCIAIS_INVALIDAS
+import sqlite3
+
+import pytest
+
+from gtd_backend.auth import (
+    AuthService,
+    AuthResult,
+    CREDENCIAIS_INVALIDAS,
+    EMAIL_JA_CADASTRADO,
+    DuplicateEmailError,
+)
 
 
 def test_deve_retornar_erro_generico_quando_usuario_nao_existe() -> None:
@@ -67,3 +77,24 @@ def test_deve_atualizar_hash_e_permitir_login_com_nova_senha() -> None:
     assert hashNovo.startswith("$argon2id$")
     assert loginComNovaSenha == AuthResult(success=True, message="login realizado com sucesso")
     assert loginComSenhaAntiga == AuthResult(success=False, message=CREDENCIAIS_INVALIDAS)
+
+
+def test_deve_retornar_erro_de_dominio_quando_email_ja_cadastrado() -> None:
+    auth = AuthService()
+    auth.register_user("duplicado@unioeste.br", "SenhaForte123")
+
+    with pytest.raises(DuplicateEmailError) as erro:
+        auth.register_user("duplicado@unioeste.br", "SenhaForte123")
+
+    assert str(erro.value) == EMAIL_JA_CADASTRADO
+
+
+def test_nao_deve_propagar_sqlite_integrity_error_no_cadastro_duplicado() -> None:
+    auth = AuthService()
+    auth.register_user("infra@unioeste.br", "SenhaForte123")
+
+    with pytest.raises(Exception) as erro:
+        auth.register_user("infra@unioeste.br", "SenhaForte123")
+
+    assert isinstance(erro.value, DuplicateEmailError)
+    assert not isinstance(erro.value, sqlite3.IntegrityError)
