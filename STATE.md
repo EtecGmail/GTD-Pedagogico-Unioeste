@@ -165,3 +165,30 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Adicionar provider de conexão PostgreSQL no bootstrap de produção reutilizando o contrato de conexão atual.
 - Aplicar autenticação/autorização nos endpoints de domínio e propagar `userId` autenticado para `RF02Service`.
 - Expandir a estratégia de ownership para módulos restantes (leituras, certificados, dashboards) com migração incremental e cobertura de testes.
+
+- **27/03/2026 (base de autenticação de requisição + ownership RF-02/RF-06)** – Implementação incremental via TDD estrito para consolidar controle de acesso real na API antes de RF-09/RF-10. Primeiro foram escritos testes HTTP cobrindo emissão de credencial no login (`accessToken` Bearer), rejeição de requests sem autenticação e enforcement de ownership em RF-02/RF-06 (incluindo rejeição segura de acesso a item de outro usuário como `404` genérico). Depois, a borda HTTP recebeu `SessionStore` em memória (`InMemorySessionStore`) com token opaco e resolução de usuário autenticado via header `Authorization: Bearer ...`. Na implementação, os endpoints de RF-02 e RF-06 passaram a exigir autenticação, propagar `userId` para os serviços e filtrar/listar/atualizar apenas itens do proprietário. Para suportar ownership no domínio, `RF02Service.changeInboxItemStatus` e `RF06Service` foram estendidos com `userId` opcional (compatível com uso incremental). Fluxos existentes de login blindado, dummy hash e rate limit foram preservados.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/http.py`
+- `src/gtd_backend/rf02.py`
+- `src/gtd_backend/rf06.py`
+- `tests/test_auth_http.py`
+- `tests/test_rf02.py`
+- `tests/test_rf06.py`
+- `tests/test_rf08.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_auth_http.py tests/test_rf02.py tests/test_rf06.py` (falha esperada no TDD antes da implementação; após ajustes, sucesso).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- Sessões/token ainda usam storage em memória por processo; para produção/multi-instância será necessário storage compartilhado com expiração/revogação centralizadas.
+- Apenas RF-02 e RF-06 receberam proteção/autorização nesta etapa; demais endpoints de domínio continuam fora do enforcement de autenticação.
+- Atualmente a resposta `401` segue o formato padrão do FastAPI (`detail`); caso haja contrato externo exigindo payload uniforme (`success/message`), convém padronizar por handler global em iteração dedicada.
+
+### Próximos passos
+- Evoluir `SessionStore` para provider persistente/distribuído com TTL e revogação (compatível com bootstrap atual de conexão compartilhada).
+- Propagar autenticação/autorização por ownership para RF-03/RF-04/RF-05/RF-08 mantendo rollout incremental e revisável.
+- Iniciar RF-09 (logging de segurança administrativo) reutilizando os eventos já existentes de autenticação e autorização.

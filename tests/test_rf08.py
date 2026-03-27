@@ -15,6 +15,16 @@ def _toBase64(content: bytes) -> str:
     return b64encode(content).decode("utf-8")
 
 
+def _autenticarUsuario(client: TestClient, app, email: str) -> dict[str, str]:
+    app.state.authService.register_user(email, "SenhaForte123")
+    respostaLogin = client.post(
+        "/auth/login",
+        json={"email": email, "password": "SenhaForte123"},
+    )
+    token = respostaLogin.json()["accessToken"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_rf08_service_deve_agregar_metricas_minimas_do_dashboard() -> None:
     rf02Service = RF02Service()
     rf03Service = RF03Service()
@@ -106,13 +116,34 @@ def test_rf08_service_deve_responder_com_zeros_quando_nao_houver_dados() -> None
 def test_rf08_http_deve_expor_dashboard_e_endpoint_de_avanco_de_leitura() -> None:
     app = createApp()
     client = TestClient(app)
+    headers = _autenticarUsuario(client=client, app=app, email="aluna@unioeste.br")
 
-    inboxId = client.post("/rf02/inbox-items", json={"content": "Organizar referências"}).json()["id"]
-    nextActionId = client.post("/rf02/inbox-items", json={"content": "Ler capítulo 2"}).json()["id"]
-    waitingId = client.post("/rf02/inbox-items", json={"content": "Aguardar retorno docente"}).json()["id"]
+    inboxId = client.post(
+        "/rf02/inbox-items",
+        json={"content": "Organizar referências"},
+        headers=headers,
+    ).json()["id"]
+    nextActionId = client.post(
+        "/rf02/inbox-items",
+        json={"content": "Ler capítulo 2"},
+        headers=headers,
+    ).json()["id"]
+    waitingId = client.post(
+        "/rf02/inbox-items",
+        json={"content": "Aguardar retorno docente"},
+        headers=headers,
+    ).json()["id"]
 
-    client.patch(f"/rf06/inbox-items/{nextActionId}/status", json={"status": "next_action"})
-    client.patch(f"/rf06/inbox-items/{waitingId}/status", json={"status": "waiting"})
+    client.patch(
+        f"/rf06/inbox-items/{nextActionId}/status",
+        json={"status": "next_action"},
+        headers=headers,
+    )
+    client.patch(
+        f"/rf06/inbox-items/{waitingId}/status",
+        json={"status": "waiting"},
+        headers=headers,
+    )
 
     createPlanResponse = client.post(
         "/rf03/reading-plans",
