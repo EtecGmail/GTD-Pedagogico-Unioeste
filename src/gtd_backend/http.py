@@ -683,11 +683,15 @@ def createApp(
         status_code=201,
         responses={400: {"model": ErrorResponse}},
     )
-    def createReadingPlan(request: CreateReadingPlanRequest):
+    def createReadingPlan(
+        request: CreateReadingPlanRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             readingPlanId = app.state.rf03Service.createReadingPlan(
                 totalPages=request.totalPages,
                 deadlineDays=request.deadlineDays,
+                userId=currentUser.userId,
             )
         except ValueError as error:
             return JSONResponse(
@@ -697,8 +701,8 @@ def createApp(
         return CreateReadingPlanResponse(id=readingPlanId)
 
     @app.get("/rf03/reading-plans", response_model=list[ReadingPlanListResponse])
-    def listReadingPlans():
-        return app.state.rf03Service.listReadingPlans()
+    def listReadingPlans(currentUser: CurrentUser = Depends(getCurrentUser)):
+        return app.state.rf03Service.listReadingPlans(userId=currentUser.userId)
 
 
 
@@ -708,7 +712,10 @@ def createApp(
         status_code=201,
         responses={400: {"model": ErrorResponse}},
     )
-    def uploadCertificate(request: CreateCertificateRequest):
+    def uploadCertificate(
+        request: CreateCertificateRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             fileContent = b64decode(request.contentBase64, validate=True)
         except Exception:
@@ -723,6 +730,7 @@ def createApp(
                 contentType=request.contentType,
                 content=fileContent,
                 hours=request.hours,
+                userId=currentUser.userId,
             )
         except ValueError as error:
             return JSONResponse(
@@ -732,13 +740,19 @@ def createApp(
         return CreateCertificateResponse(id=certificateId)
 
     @app.get("/rf04/certificates", response_model=list[CertificateListItem])
-    def listCertificates():
-        return app.state.rf04Service.listCertificates()
+    def listCertificates(currentUser: CurrentUser = Depends(getCurrentUser)):
+        return app.state.rf04Service.listCertificates(userId=currentUser.userId)
 
     @app.get("/rf05/acc-progress", response_model=AccHoursProgressResponse)
-    def getAccHoursProgress(targetHours: int | None = Query(default=None, gt=0, le=10000)):
+    def getAccHoursProgress(
+        targetHours: int | None = Query(default=None, gt=0, le=10000),
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
-            progress = app.state.rf05Service.getAccHoursProgress(targetHours=targetHours)
+            progress = app.state.rf05Service.getAccHoursProgress(
+                targetHours=targetHours,
+                userId=currentUser.userId,
+            )
         except ValueError as error:
             return JSONResponse(
                 status_code=400,
@@ -747,8 +761,14 @@ def createApp(
         return AccHoursProgressResponse(**progress)
 
     @app.get("/rf08/dashboard", response_model=StudentDashboardResponse)
-    def getStudentDashboard(targetHours: int | None = Query(default=None, gt=0, le=10000)):
-        dashboard = app.state.rf08Service.getStudentDashboard(targetHours=targetHours)
+    def getStudentDashboard(
+        targetHours: int | None = Query(default=None, gt=0, le=10000),
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
+        dashboard = app.state.rf08Service.getStudentDashboard(
+            userId=currentUser.userId,
+            targetHours=targetHours,
+        )
         return StudentDashboardResponse(**dashboard)
 
     @app.patch(
@@ -756,11 +776,16 @@ def createApp(
         response_model=AdvanceReadingPlanResponse,
         responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     )
-    def advanceReadingPlan(planId: int, request: AdvanceReadingPlanRequest):
+    def advanceReadingPlan(
+        planId: int,
+        request: AdvanceReadingPlanRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             updatedReadingPlan = app.state.rf03Service.advanceReadingPlan(
                 planId=planId,
                 pagesRead=request.pagesRead,
+                userId=currentUser.userId,
             )
         except LookupError as error:
             return JSONResponse(

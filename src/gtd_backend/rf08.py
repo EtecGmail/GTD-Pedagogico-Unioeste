@@ -14,10 +14,10 @@ class RF08Service:
         self.rf05Service = rf05Service
         self.rf06Service = rf06Service
 
-    def _buildStatusCounts(self) -> dict[str, int]:
-        inboxItems = self.rf06Service.listInboxItems(status="inbox")
-        nextActionItems = self.rf06Service.listInboxItems(status="next_action")
-        waitingItems = self.rf06Service.listInboxItems(status="waiting")
+    def _buildStatusCounts(self, userId: int) -> dict[str, int]:
+        inboxItems = self.rf06Service.listInboxItems(status="inbox", userId=userId)
+        nextActionItems = self.rf06Service.listInboxItems(status="next_action", userId=userId)
+        waitingItems = self.rf06Service.listInboxItems(status="waiting", userId=userId)
 
         return {
             "inbox": len(inboxItems),
@@ -25,8 +25,8 @@ class RF08Service:
             "waiting": len(waitingItems),
         }
 
-    def _buildReadingSummary(self) -> dict[str, int | float]:
-        plans = self.rf03Service.listReadingPlans()
+    def _buildReadingSummary(self, userId: int) -> dict[str, int | float]:
+        plans = self.rf03Service.listReadingPlans(userId=userId)
         if not plans:
             return {
                 "totalPlans": 0,
@@ -54,9 +54,9 @@ class RF08Service:
             "averageCompletionPercentage": averageCompletionPercentage,
         }
 
-    def getStudentDashboard(self, targetHours: int | None = None) -> dict[str, dict]:
+    def getStudentDashboard(self, userId: int, targetHours: int | None = None) -> dict[str, dict]:
         return {
-            "statusCounts": self._buildStatusCounts(),
-            "accProgress": self.rf05Service.getAccHoursProgress(targetHours=targetHours),
-            "readingSummary": self._buildReadingSummary(),
+            "statusCounts": self._buildStatusCounts(userId=userId),
+            "accProgress": self.rf05Service.getAccHoursProgress(targetHours=targetHours, userId=userId),
+            "readingSummary": self._buildReadingSummary(userId=userId),
         }

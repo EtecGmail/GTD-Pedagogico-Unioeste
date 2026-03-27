@@ -32,20 +32,21 @@ def test_rf08_service_deve_agregar_metricas_minimas_do_dashboard() -> None:
     rf05Service = RF05Service(rf04Service=rf04Service, defaultTargetHours=200)
     rf06Service = RF06Service(rf02Service=rf02Service)
 
-    inboxId = rf02Service.captureInboxItem(content="Revisar plano de aula")
-    nextActionId = rf02Service.captureInboxItem(content="Preparar seminário")
-    waitingId = rf02Service.captureInboxItem(content="Aguardar feedback")
-    rf06Service.changeInboxItemStatus(itemId=nextActionId, targetStatus="next_action")
-    rf06Service.changeInboxItemStatus(itemId=waitingId, targetStatus="waiting")
+    inboxId = rf02Service.captureInboxItem(content="Revisar plano de aula", userId=1)
+    nextActionId = rf02Service.captureInboxItem(content="Preparar seminário", userId=1)
+    waitingId = rf02Service.captureInboxItem(content="Aguardar feedback", userId=1)
+    rf06Service.changeInboxItemStatus(itemId=nextActionId, targetStatus="next_action", userId=1)
+    rf06Service.changeInboxItemStatus(itemId=waitingId, targetStatus="waiting", userId=1)
 
-    readingPlanId = rf03Service.createReadingPlan(totalPages=120, deadlineDays=10)
-    rf03Service.advanceReadingPlan(planId=readingPlanId, pagesRead=30)
+    readingPlanId = rf03Service.createReadingPlan(totalPages=120, deadlineDays=10, userId=1)
+    rf03Service.advanceReadingPlan(planId=readingPlanId, pagesRead=30, userId=1)
 
     rf04Service.uploadCertificate(
         originalName="acc.pdf",
         contentType="application/pdf",
         content=b"acc-content",
         hours=40,
+        userId=1,
     )
 
     rf08Service = RF08Service(
@@ -54,7 +55,7 @@ def test_rf08_service_deve_agregar_metricas_minimas_do_dashboard() -> None:
         rf06Service=rf06Service,
     )
 
-    dashboard = rf08Service.getStudentDashboard()
+    dashboard = rf08Service.getStudentDashboard(userId=1)
 
     assert dashboard["statusCounts"] == {
         "inbox": 1,
@@ -89,7 +90,7 @@ def test_rf08_service_deve_responder_com_zeros_quando_nao_houver_dados() -> None
         rf06Service=RF06Service(rf02Service=RF02Service()),
     )
 
-    dashboard = rf08Service.getStudentDashboard()
+    dashboard = rf08Service.getStudentDashboard(userId=1)
 
     assert dashboard["statusCounts"] == {
         "inbox": 0,
@@ -148,12 +149,14 @@ def test_rf08_http_deve_expor_dashboard_e_endpoint_de_avanco_de_leitura() -> Non
     createPlanResponse = client.post(
         "/rf03/reading-plans",
         json={"totalPages": 80, "deadlineDays": 8},
+        headers=headers,
     )
     planId = createPlanResponse.json()["id"]
 
     advanceResponse = client.patch(
         f"/rf08/reading-plans/{planId}/advance",
         json={"pagesRead": 20},
+        headers=headers,
     )
     assert advanceResponse.status_code == 200
     assert advanceResponse.json() == {
@@ -170,10 +173,11 @@ def test_rf08_http_deve_expor_dashboard_e_endpoint_de_avanco_de_leitura() -> Non
             "contentBase64": _toBase64(b"acc"),
             "hours": 30,
         },
+        headers=headers,
     )
     assert certificateResponse.status_code == 201
 
-    dashboardResponse = client.get("/rf08/dashboard")
+    dashboardResponse = client.get("/rf08/dashboard", headers=headers)
     assert dashboardResponse.status_code == 200
     assert dashboardResponse.json() == {
         "statusCounts": {
@@ -203,10 +207,12 @@ def test_rf08_http_deve_expor_dashboard_e_endpoint_de_avanco_de_leitura() -> Non
 def test_rf08_http_deve_validar_payload_de_avanco_e_rejeitar_plano_inexistente() -> None:
     app = createApp()
     client = TestClient(app)
+    headers = _autenticarUsuario(client=client, app=app, email="aluna@unioeste.br")
 
     responsePlanoInexistente = client.patch(
         "/rf08/reading-plans/999/advance",
         json={"pagesRead": 5},
+        headers=headers,
     )
     assert responsePlanoInexistente.status_code == 404
     assert responsePlanoInexistente.json() == {
@@ -217,14 +223,90 @@ def test_rf08_http_deve_validar_payload_de_avanco_e_rejeitar_plano_inexistente()
     createPlanResponse = client.post(
         "/rf03/reading-plans",
         json={"totalPages": 40, "deadlineDays": 4},
+        headers=headers,
     )
     planId = createPlanResponse.json()["id"]
 
     payloadInvalido = client.patch(
         f"/rf08/reading-plans/{planId}/advance",
         json={"pagesRead": 0, "extra": True},
+        headers=headers,
     )
-    payloadIncompleto = client.patch(f"/rf08/reading-plans/{planId}/advance", json={})
+    payloadIncompleto = client.patch(
+        f"/rf08/reading-plans/{planId}/advance",
+        json={},
+        headers=headers,
+    )
 
     assert payloadInvalido.status_code == 422
     assert payloadIncompleto.status_code == 422
+
+
+def test_rf08_http_deve_rejeitar_sem_autenticacao_e_isolar_dashboard_por_usuario() -> None:
+    app = createApp()
+    client = TestClient(app)
+    headersUserA = _autenticarUsuario(client=client, app=app, email="a@unioeste.br")
+    headersUserB = _autenticarUsuario(client=client, app=app, email="b@unioeste.br")
+
+    semTokenDashboard = client.get("/rf08/dashboard")
+    assert semTokenDashboard.status_code == 401
+
+    planoA = client.post(
+        "/rf03/reading-plans",
+        json={"totalPages": 50, "deadlineDays": 5},
+        headers=headersUserA,
+    ).json()["id"]
+    client.patch(
+        f"/rf08/reading-plans/{planoA}/advance",
+        json={"pagesRead": 10},
+        headers=headersUserA,
+    )
+    client.post(
+        "/rf04/certificates",
+        json={
+            "originalName": "a.pdf",
+            "contentType": "application/pdf",
+            "contentBase64": _toBase64(b"a"),
+            "hours": 12,
+        },
+        headers=headersUserA,
+    )
+    client.post(
+        "/rf02/inbox-items",
+        json={"content": "Item da usuária A"},
+        headers=headersUserA,
+    )
+
+    client.post(
+        "/rf03/reading-plans",
+        json={"totalPages": 30, "deadlineDays": 3},
+        headers=headersUserB,
+    )
+    client.post(
+        "/rf04/certificates",
+        json={
+            "originalName": "b.pdf",
+            "contentType": "application/pdf",
+            "contentBase64": _toBase64(b"b"),
+            "hours": 5,
+        },
+        headers=headersUserB,
+    )
+
+    dashboardA = client.get("/rf08/dashboard", headers=headersUserA)
+    dashboardB = client.get("/rf08/dashboard", headers=headersUserB)
+    assert dashboardA.status_code == 200
+    assert dashboardB.status_code == 200
+    assert dashboardA.json()["accProgress"]["totalHours"] == 12
+    assert dashboardB.json()["accProgress"]["totalHours"] == 5
+
+    tentativaCruzarOwnership = client.patch(
+        f"/rf08/reading-plans/{planoA}/advance",
+        json={"pagesRead": 2},
+        headers=headersUserB,
+    )
+    assert tentativaCruzarOwnership.status_code == 404
+    assert tentativaCruzarOwnership.json() == {
+        "success": False,
+        "message": "plano de leitura não encontrado",
+    }

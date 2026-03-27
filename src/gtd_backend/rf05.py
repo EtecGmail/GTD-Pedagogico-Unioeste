@@ -11,11 +11,15 @@ class RF05Service:
         if targetHours <= 0:
             raise ValueError("meta de horas deve ser maior que zero")
 
-    def getAccHoursProgress(self, targetHours: int | None = None) -> dict[str, int | float | bool]:
+    def getAccHoursProgress(
+        self,
+        targetHours: int | None = None,
+        userId: int | None = None,
+    ) -> dict[str, int | float | bool]:
         resolvedTargetHours = targetHours if targetHours is not None else self.defaultTargetHours
         self._validateTargetHours(resolvedTargetHours)
 
-        certificates = self.rf04Service.listCertificates()
+        certificates = self.rf04Service.listCertificates(userId=userId)
         totalHours = sum(
             int(certificate["hours"])
             for certificate in certificates

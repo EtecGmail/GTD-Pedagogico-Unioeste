@@ -92,9 +92,37 @@ def test_rf04_service_deve_gerar_storage_key_unica_para_evitar_colisoes() -> Non
     assert listed[0]["storageKey"] != listed[1]["storageKey"]
 
 
+def test_rf04_service_deve_listar_certificados_por_usuario() -> None:
+    service = RF04Service(storage=InMemoryCertificateStorage())
+    service.uploadCertificate(
+        originalName="a.pdf",
+        contentType="application/pdf",
+        content=b"a",
+        hours=1,
+        userId=1,
+    )
+    service.uploadCertificate(
+        originalName="b.pdf",
+        contentType="application/pdf",
+        content=b"b",
+        hours=2,
+        userId=2,
+    )
+
+    certificadosUser1 = service.listCertificates(userId=1)
+    assert len(certificadosUser1) == 1
+    assert certificadosUser1[0]["hours"] == 1
+
+
 def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
     app = createApp()
     client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+    token = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
 
     responseUpload = client.post(
         "/rf04/certificates",
@@ -104,12 +132,13 @@ def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
             "contentBase64": _toBase64(b"conteudo-png"),
             "hours": 20,
         },
+        headers=headers,
     )
 
     assert responseUpload.status_code == 201
     certificateId = responseUpload.json()["id"]
 
-    responseList = client.get("/rf04/certificates")
+    responseList = client.get("/rf04/certificates", headers=headers)
     assert responseList.status_code == 200
 
     certificates = responseList.json()
@@ -123,10 +152,17 @@ def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
 def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_nao_suportado() -> None:
     app = createApp()
     client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+    token = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
 
     missingField = client.post(
         "/rf04/certificates",
         json={"originalName": "x.pdf", "contentType": "application/pdf"},
+        headers=headers,
     )
     assert missingField.status_code == 422
 
@@ -138,6 +174,7 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
             "contentBase64": _toBase64(b"conteudo"),
             "hours": -10,
         },
+        headers=headers,
     )
     assert invalidHours.status_code == 422
 
@@ -148,6 +185,7 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
             "contentType": "application/pdf",
             "contentBase64": "***nao-base64***",
         },
+        headers=headers,
     )
     assert invalidBase64.status_code == 400
     assert invalidBase64.json()["message"] == "payload de arquivo inválido"
@@ -159,6 +197,7 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
             "contentType": "image/gif",
             "contentBase64": _toBase64(b"gif"),
         },
+        headers=headers,
     )
     assert invalidType.status_code == 400
     assert invalidType.json()["message"] == "tipo de arquivo não permitido"
@@ -170,6 +209,53 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
             "contentType": "application/pdf",
             "contentBase64": _toBase64(b"a" * (5 * 1024 * 1024 + 1)),
         },
+        headers=headers,
     )
     assert oversized.status_code == 400
     assert oversized.json()["message"] == "arquivo excede o limite de 5 MB"
+
+
+def test_rf04_http_deve_rejeitar_sem_autenticacao_e_restringir_ownership() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("a@unioeste.br", "SenhaForte123")
+    app.state.authService.register_user("b@unioeste.br", "SenhaForte123")
+    tokenA = client.post(
+        "/auth/login",
+        json={"email": "a@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    tokenB = client.post(
+        "/auth/login",
+        json={"email": "b@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headersA = {"Authorization": f"Bearer {tokenA}"}
+    headersB = {"Authorization": f"Bearer {tokenB}"}
+
+    respostaSemToken = client.get("/rf04/certificates")
+    assert respostaSemToken.status_code == 401
+
+    client.post(
+        "/rf04/certificates",
+        json={
+            "originalName": "a.pdf",
+            "contentType": "application/pdf",
+            "contentBase64": _toBase64(b"a"),
+            "hours": 5,
+        },
+        headers=headersA,
+    )
+    client.post(
+        "/rf04/certificates",
+        json={
+            "originalName": "b.pdf",
+            "contentType": "application/pdf",
+            "contentBase64": _toBase64(b"b"),
+            "hours": 7,
+        },
+        headers=headersB,
+    )
+
+    respostaA = client.get("/rf04/certificates", headers=headersA)
+    respostaB = client.get("/rf04/certificates", headers=headersB)
+    assert [item["hours"] for item in respostaA.json()] == [5]
+    assert [item["hours"] for item in respostaB.json()] == [7]

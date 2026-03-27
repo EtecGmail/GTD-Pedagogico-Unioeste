@@ -63,6 +63,7 @@ class RF04Service:
             """
             CREATE TABLE IF NOT EXISTS acc_certificates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 file_identifier TEXT NOT NULL UNIQUE,
                 original_name TEXT NOT NULL,
                 content_type TEXT NOT NULL,
@@ -74,6 +75,10 @@ class RF04Service:
             )
             """
         )
+        columns = self.connection.execute("PRAGMA table_info(acc_certificates)").fetchall()
+        existingColumns = {str(column["name"]) for column in columns}
+        if "user_id" not in existingColumns:
+            self.connection.execute("ALTER TABLE acc_certificates ADD COLUMN user_id INTEGER")
         self.connection.commit()
 
     def uploadCertificate(
@@ -82,6 +87,7 @@ class RF04Service:
         contentType: str,
         content: bytes,
         hours: int | None = None,
+        userId: int | None = None,
     ) -> int:
         safeOriginalName = _sanitizeOriginalName(originalName)
 
@@ -93,6 +99,8 @@ class RF04Service:
             raise ValueError("arquivo excede o limite de 5 MB")
         if hours is not None and hours < 0:
             raise ValueError("horas devem ser zero ou positivas")
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário do certificado é inválido")
 
         fileIdentifier = uuid.uuid4().hex
         storageKey = self._buildUniqueStorageKey(content=content, contentType=contentType)
@@ -102,6 +110,7 @@ class RF04Service:
         cursor = self.connection.execute(
             """
             INSERT INTO acc_certificates (
+                user_id,
                 file_identifier,
                 original_name,
                 content_type,
@@ -111,9 +120,10 @@ class RF04Service:
                 metadata,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                userId,
                 fileIdentifier,
                 safeOriginalName,
                 contentType,
@@ -140,22 +150,46 @@ class RF04Service:
 
         raise ValueError("falha ao gerar identificador único para armazenamento")
 
-    def listCertificates(self) -> list[dict[str, int | str | None | dict[str, int | bool]]]:
-        rows = self.connection.execute(
-            """
-            SELECT
-                id,
-                file_identifier,
-                original_name,
-                content_type,
-                size_bytes,
-                hours,
-                storage_key,
-                created_at
-            FROM acc_certificates
-            ORDER BY created_at DESC, id DESC
-            """
-        ).fetchall()
+    def listCertificates(
+        self,
+        userId: int | None = None,
+    ) -> list[dict[str, int | str | None | dict[str, int | bool]]]:
+        if userId is None:
+            rows = self.connection.execute(
+                """
+                SELECT
+                    id,
+                    file_identifier,
+                    original_name,
+                    content_type,
+                    size_bytes,
+                    hours,
+                    storage_key,
+                    created_at
+                FROM acc_certificates
+                ORDER BY created_at DESC, id DESC
+                """
+            ).fetchall()
+        else:
+            if userId <= 0:
+                raise ValueError("usuário do certificado é inválido")
+            rows = self.connection.execute(
+                """
+                SELECT
+                    id,
+                    file_identifier,
+                    original_name,
+                    content_type,
+                    size_bytes,
+                    hours,
+                    storage_key,
+                    created_at
+                FROM acc_certificates
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (userId,),
+            ).fetchall()
 
         return [
             {

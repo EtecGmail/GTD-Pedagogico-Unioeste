@@ -53,19 +53,41 @@ def test_rf03_service_deve_rejeitar_valores_zero_negativos_ou_combinacoes_invali
             assert str(error) == expectedError
 
 
+def test_rf03_service_deve_listar_e_avancar_apenas_planos_do_usuario() -> None:
+    service = RF03Service(nowProvider=lambda: datetime(2026, 3, 26, 12, 0, tzinfo=UTC))
+    planUserA = service.createReadingPlan(totalPages=60, deadlineDays=6, userId=1)
+    service.createReadingPlan(totalPages=40, deadlineDays=4, userId=2)
+
+    plansUserA = service.listReadingPlans(userId=1)
+    assert [plan["id"] for plan in plansUserA] == [planUserA]
+
+    try:
+        service.advanceReadingPlan(planId=planUserA, pagesRead=10, userId=2)
+        assert False, "esperava erro para acesso a plano de outro usuário"
+    except LookupError as error:
+        assert str(error) == "plano de leitura não encontrado"
+
+
 def test_rf03_http_deve_criar_e_listar_plano_de_leitura() -> None:
     app = createApp()
     client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+    token = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
 
     respostaCriacao = client.post(
         "/rf03/reading-plans",
         json={"totalPages": 95, "deadlineDays": 3},
+        headers=headers,
     )
 
     assert respostaCriacao.status_code == 201
     planId = respostaCriacao.json()["id"]
 
-    respostaListagem = client.get("/rf03/reading-plans")
+    respostaListagem = client.get("/rf03/reading-plans", headers=headers)
     assert respostaListagem.status_code == 200
 
     plans = respostaListagem.json()
@@ -82,12 +104,51 @@ def test_rf03_http_deve_criar_e_listar_plano_de_leitura() -> None:
 def test_rf03_http_deve_rejeitar_payload_invalido_ou_incompleto() -> None:
     app = createApp()
     client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123")
+    token = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
 
-    payloadIncompleto = client.post("/rf03/reading-plans", json={"totalPages": 10})
+    payloadIncompleto = client.post(
+        "/rf03/reading-plans",
+        json={"totalPages": 10},
+        headers=headers,
+    )
     assert payloadIncompleto.status_code == 422
 
     payloadInvalido = client.post(
         "/rf03/reading-plans",
         json={"totalPages": 0, "deadlineDays": -1, "campoExtra": True},
+        headers=headers,
     )
     assert payloadInvalido.status_code == 422
+
+
+def test_rf03_http_deve_rejeitar_sem_autenticacao_e_restringir_por_ownership() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("a@unioeste.br", "SenhaForte123")
+    app.state.authService.register_user("b@unioeste.br", "SenhaForte123")
+    tokenA = client.post(
+        "/auth/login",
+        json={"email": "a@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    tokenB = client.post(
+        "/auth/login",
+        json={"email": "b@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    headersA = {"Authorization": f"Bearer {tokenA}"}
+    headersB = {"Authorization": f"Bearer {tokenB}"}
+
+    respostaSemToken = client.get("/rf03/reading-plans")
+    assert respostaSemToken.status_code == 401
+
+    client.post("/rf03/reading-plans", json={"totalPages": 50, "deadlineDays": 5}, headers=headersA)
+    client.post("/rf03/reading-plans", json={"totalPages": 30, "deadlineDays": 3}, headers=headersB)
+
+    respostaA = client.get("/rf03/reading-plans", headers=headersA)
+    respostaB = client.get("/rf03/reading-plans", headers=headersB)
+    assert len(respostaA.json()) == 1
+    assert len(respostaB.json()) == 1
