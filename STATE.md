@@ -78,3 +78,23 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Planejar migração do endpoint de upload para `multipart/form-data` com suporte mobile/câmera e validação de assinatura mágica de arquivo (defesa em profundidade).
 - Definir camada de persistência compartilhada para evitar múltiplos bancos em memória por serviço conforme avanço da fase 3.
 - Planejar proteção de acesso (autorização/autenticação) nos endpoints de domínio antes de abrir consumo externo.
+
+- **27/03/2026 (fase 3 / rf-07, reforço TDD solicitado)** – Reescrita/organização dos testes de RF-07 em `tests/test_rf07.py` com foco explícito nos cenários solicitados: serviço (não enumeração de conta, geração de token com expiração, rejeição de token inválido/expirado, atualização de hash Argon2id, token de uso único, rejeição de payload inválido) e HTTP (`/auth/password-reset/request` com mesma resposta para e-mails existentes/inexistentes, `/auth/password-reset/confirm` sucesso/erro e validação `422` para payload incompleto/campos extras). Foi adotado `InMemoryPasswordResetEmailSender` e `nowProvider` fixo/mutável nos testes para controlar expiração de forma determinística. Implementação de serviço/endpoints já existente permaneceu compatível e suíte seguiu verde.
+
+### Arquivos modificados no ciclo atual
+- `tests/test_rf07.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `pytest -q tests/test_rf07.py tests/test_auth_http.py` (falha de ambiente fora do Poetry: `ModuleNotFoundError: No module named 'fastapi'`).
+- `poetry install` (sucesso: sem atualizações necessárias).
+- `poetry run pytest -q tests/test_rf07.py` (sucesso: `10 passed`).
+- `poetry run pytest -q` (sucesso: `69 passed`).
+
+### Problemas/riscos remanescentes
+- O serviço RF-07 mantém tokens em SQLite em memória; para produção será necessário storage persistente e estratégia de revogação distribuída.
+- O endpoint de solicitação de reset já mitiga enumeração por resposta genérica, mas ataques distribuídos podem demandar política adicional por IP puro e/ou backoff progressivo.
+
+### Próximos passos
+- Evoluir políticas antiabuso do RF-07 (rate limit multicamada e observabilidade de padrões).
+- Preparar persistência compartilhada para tokens de reset e demais serviços stateful.
