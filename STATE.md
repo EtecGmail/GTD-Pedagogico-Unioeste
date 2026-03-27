@@ -21,8 +21,8 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | RF-07 | Recuperação de senha via e‑mail | done | Codex | RF-07 finalizado via TDD com tokens temporários hasheados, fluxo cego na solicitação e confirmação com Argon2id + invalidação por uso/expiração. |
 | RF-08 | Gráficos de avanço das leituras | done | Codex | Base backend-first implementada via TDD com agregação de dashboard e endpoint mínimo de avanço de leitura. |
 | RF-09 | Log de eventos de segurança | done | Codex | RF-09 implementado via TDD com `SecurityEventService`, persistência simples em SQLite compartilhado e registro seguro de eventos críticos de autenticação/autorização/upload. |
-| RF-10 | Alerta de 90 % de cota de armazenamento | todo | — | — |
-| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-09 e validações executadas. |
+| RF-10 | Alerta de 90 % de cota de armazenamento | done | Codex | RF-10 implementado via TDD com cálculo por usuário (`totalBytesUsed`, `quotaBytes`, `percentageUsed`, `isNearLimit`, `isOverLimit`), endpoint autenticado `GET /rf10/storage-usage` e evento deduplicado de observabilidade ao entrar na faixa de alerta. |
+| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-10 e validações executadas. |
 
 ## Histórico
 
@@ -289,3 +289,25 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Definir política de auditoria administrativa (RBAC, paginação, retenção e exportação) antes de expor endpoint de consulta de eventos.
 - Reutilizar `SecurityEventService` para cobrir RF-10 e futuras detecções de abuso/anomalia sem vazar dados sensíveis.
+
+- **27/03/2026 (fase 3 / rf-10, alerta de 90% da cota por usuário)** – Implementação do RF-10 via TDD estrito com abordagem mínima e reutilização de ownership já existente no RF-04. Primeiro foram escritos testes em `tests/test_rf10.py` cobrindo: uso zero para usuário sem certificados, soma correta de `sizeBytes` por usuário autenticado, isolamento entre usuários, ativação de alerta em `>= 90%`, sinalização de estouro de cota, tratamento explícito de configuração inválida (`quotaBytes <= 0`), proteção HTTP com autenticação obrigatória e deduplicação de evento de observabilidade ao entrar na faixa de alerta. Em seguida, foi implementado `RF10Service` (`src/gtd_backend/rf10.py`) com cálculo de `totalBytesUsed`, `quotaBytes`, `percentageUsed`, `isNearLimit` e `isOverLimit`, reaproveitando `RF04Service` para leitura dos certificados do usuário. Por fim, `http.py` foi integrado com o endpoint mínimo `GET /rf10/storage-usage` (Bearer obrigatório), registro opcional de evento `storage_quota_near_limit` via `SecurityEventService` e resposta tipada para consumo futuro de notificações/UI. Suíte final: `100 passed`.
+
+### Arquivos modificados no ciclo atual
+- `tests/test_rf10.py`
+- `src/gtd_backend/rf10.py`
+- `src/gtd_backend/http.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf10.py` (falha esperada no TDD antes da implementação: `ModuleNotFoundError` para `gtd_backend.rf10`).
+- `poetry run pytest -q tests/test_rf10.py` (sucesso após implementação: `7 passed`).
+- `poetry run pytest -q` (sucesso: `100 passed`).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- A deduplicação de evento de alerta usa estado em memória por processo; em ambiente distribuído será necessário persistir esse controle para evitar ruído entre instâncias.
+- A cota atual foi definida em valor fixo no bootstrap (`5 MB`) para manter a implementação mínima; a evolução para cota por plano/usuário requer configuração persistente.
+
+### Próximos passos
+- Evoluir o RF-10 para cota configurável por usuário/plano sem quebrar contrato do endpoint.
+- Integrar estratégia de notificação (push/e-mail) reaproveitando o evento `storage_quota_near_limit` com throttling centralizado.

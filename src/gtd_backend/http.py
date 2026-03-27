@@ -23,6 +23,7 @@ from gtd_backend.rf06 import RF06Service
 from gtd_backend.rf07 import InMemoryPasswordResetEmailSender, RF07Service
 from gtd_backend.rf08 import RF08Service
 from gtd_backend.rf09 import SecurityEventService
+from gtd_backend.rf10 import RF10Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -292,6 +293,14 @@ class StudentDashboardResponse(BaseModel):
     readingSummary: DashboardReadingSummaryResponse
 
 
+class StorageUsageResponse(BaseModel):
+    totalBytesUsed: int
+    quotaBytes: int
+    percentageUsed: float
+    isNearLimit: bool
+    isOverLimit: bool
+
+
 class AdvanceReadingPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -408,6 +417,11 @@ def createApp(
         connection=app.state.dbConnection,
     )
     app.state.rf09Service = SecurityEventService(connection=app.state.dbConnection)
+    app.state.rf10Service = RF10Service(
+        rf04Service=app.state.rf04Service,
+        quotaBytes=5 * 1024 * 1024,
+        rf09Service=app.state.rf09Service,
+    )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.sessionStore = InMemorySessionStore()
     app.state.nowProvider = nowProvider or time.time
@@ -865,6 +879,17 @@ def createApp(
                 content={"success": False, "message": str(error)},
             )
         return AccHoursProgressResponse(**progress)
+
+    @app.get("/rf10/storage-usage", response_model=StorageUsageResponse)
+    def getStorageUsage(currentUser: CurrentUser = Depends(getCurrentUser)):
+        try:
+            usageSummary = app.state.rf10Service.getStorageUsageSummary(userId=currentUser.userId)
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return StorageUsageResponse(**usageSummary)
 
     @app.get("/rf08/dashboard", response_model=StudentDashboardResponse)
     def getStudentDashboard(
