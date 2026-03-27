@@ -2,26 +2,14 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 
 from gtd_backend.auth import AuthService, CREDENCIAIS_INVALIDAS
-from gtd_backend.rf07 import RF07Service
+from gtd_backend.rf07 import InMemoryPasswordResetEmailSender, RF07Service
 
 
-class FakeEmailSender:
-    def __init__(self) -> None:
-        self.sentMessages: list[dict[str, str]] = []
-
-    def sendPasswordReset(self, *, email: str, token: str, expiresAt: str) -> None:
-        self.sentMessages.append(
-            {
-                "email": email,
-                "token": token,
-                "expiresAt": expiresAt,
-            }
-        )
-
-
-def _buildService(now: datetime | None = None) -> tuple[RF07Service, AuthService, FakeEmailSender]:
+def _buildService(
+    now: datetime | None = None,
+) -> tuple[RF07Service, AuthService, InMemoryPasswordResetEmailSender]:
     authService = AuthService()
-    emailSender = FakeEmailSender()
+    emailSender = InMemoryPasswordResetEmailSender()
     fixedNow = now if now is not None else datetime(2026, 3, 27, 12, 0, tzinfo=UTC)
     service = RF07Service(
         authService=authService,
@@ -58,7 +46,7 @@ def test_rf07_request_password_reset_deve_ser_cego_para_usuario_inexistente() ->
         "SELECT COUNT(*) AS total FROM password_reset_tokens"
     ).fetchone()
     assert int(totalTokens["total"]) == 0
-    assert emailSender.sentMessages == []
+    assert emailSender.queuedMessages == []
 
 
 def test_rf07_request_password_reset_deve_persistir_apenas_hash_e_enviar_email_quando_usuario_existe() -> None:
@@ -68,9 +56,10 @@ def test_rf07_request_password_reset_deve_persistir_apenas_hash_e_enviar_email_q
 
     service.requestPasswordReset("  ALUNA@unioeste.br ")
 
-    assert len(emailSender.sentMessages) == 1
-    sent = emailSender.sentMessages[0]
-    assert sent["email"] == "aluna@unioeste.br"
+    assert len(emailSender.queuedMessages) == 1
+    sent = emailSender.queuedMessages[0]
+    assert sent["toEmail"] == "aluna@unioeste.br"
+    assert "senha" not in str(sent).lower()
 
     row = service.connection.execute(
         """
@@ -81,7 +70,7 @@ def test_rf07_request_password_reset_deve_persistir_apenas_hash_e_enviar_email_q
 
     assert row is not None
     assert int(row["user_id"]) == userId
-    assert str(row["token_hash"]) == hashlib.sha256(sent["token"].encode("utf-8")).hexdigest()
+    assert str(row["token_hash"]) == hashlib.sha256(sent["resetToken"].encode("utf-8")).hexdigest()
     assert row["used_at"] is None
     assert datetime.fromisoformat(str(row["created_at"])) == fixedNow
     assert datetime.fromisoformat(str(row["expires_at"])) == fixedNow + timedelta(hours=1)
@@ -103,7 +92,7 @@ def test_rf07_confirm_password_reset_deve_rejeitar_token_expirado_ou_ja_usado() 
     authService.register_user("aluna@unioeste.br", "SenhaAntiga123")
 
     service.requestPasswordReset("aluna@unioeste.br")
-    firstToken = emailSender.sentMessages[0]["token"]
+    firstToken = emailSender.queuedMessages[0]["resetToken"]
 
     service.nowProvider = lambda: fixedNow + timedelta(hours=2)
 
@@ -115,7 +104,7 @@ def test_rf07_confirm_password_reset_deve_rejeitar_token_expirado_ou_ja_usado() 
 
     service.nowProvider = lambda: fixedNow
     service.requestPasswordReset("aluna@unioeste.br")
-    secondToken = emailSender.sentMessages[1]["token"]
+    secondToken = emailSender.queuedMessages[1]["resetToken"]
 
     service.confirmPasswordReset(secondToken, "NovaSenhaForte123")
 
@@ -132,7 +121,7 @@ def test_rf07_confirm_password_reset_deve_atualizar_senha_com_argon2id_e_marcar_
     authService.register_user("aluna@unioeste.br", "SenhaAntiga123")
 
     service.requestPasswordReset("aluna@unioeste.br")
-    token = emailSender.sentMessages[0]["token"]
+    token = emailSender.queuedMessages[0]["resetToken"]
 
     service.confirmPasswordReset(token, "NovaSenhaForte123")
 

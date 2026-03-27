@@ -3,6 +3,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from base64 import b64decode
 
@@ -17,6 +18,7 @@ from gtd_backend.rf03 import RF03Service
 from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
 from gtd_backend.rf05 import RF05Service
 from gtd_backend.rf06 import RF06Service
+from gtd_backend.rf07 import InMemoryPasswordResetEmailSender, RF07Service
 from gtd_backend.rf08 import RF08Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
@@ -45,6 +47,25 @@ class LoginResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class RequestPasswordResetBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=255)
+
+    @field_validator("email")
+    @classmethod
+    def validateEmail(cls, email: str) -> str:
+        normalizedEmail = email.strip().lower()
+        if "@" not in normalizedEmail:
+            raise ValueError("email inválido")
+        return normalizedEmail
+
+
+class RequestPasswordResetResponse(BaseModel):
     success: bool
     message: str
 
@@ -308,6 +329,12 @@ def createApp(
         rf05Service=app.state.rf05Service,
         rf06Service=app.state.rf06Service,
     )
+    app.state.rf07EmailSender = InMemoryPasswordResetEmailSender()
+    app.state.rf07Service = RF07Service(
+        authService=app.state.authService,
+        emailSender=app.state.rf07EmailSender,
+        nowProvider=lambda: datetime.now().astimezone(),
+    )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -350,6 +377,18 @@ def createApp(
             _minimizeEmailIdentifier(loginRequest.email),
         )
         return LoginResponse(success=True, message=authResult.message)
+
+    @app.post("/rf07/password-reset/request", response_model=RequestPasswordResetResponse)
+    def requestPasswordReset(requestBody: RequestPasswordResetBody):
+        app.state.rf07Service.requestPasswordReset(requestBody.email)
+        logger.info(
+            "evento=rf07_password_reset_requested email_hash=%s",
+            _minimizeEmailIdentifier(requestBody.email),
+        )
+        return RequestPasswordResetResponse(
+            success=True,
+            message="se a conta existir, enviaremos instruções por e-mail",
+        )
 
     @app.post(
         "/rf01/professors",

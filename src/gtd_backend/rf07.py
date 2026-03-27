@@ -2,15 +2,35 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 import sqlite3
+from typing import Protocol
 
 from gtd_backend.auth import AuthService, CREDENCIAIS_INVALIDAS
+
+
+class PasswordResetEmailSender(Protocol):
+    def sendPasswordResetEmail(self, toEmail: str, resetToken: str, expiresAt: str) -> None:
+        ...
+
+
+class InMemoryPasswordResetEmailSender:
+    def __init__(self) -> None:
+        self.queuedMessages: list[dict[str, str]] = []
+
+    def sendPasswordResetEmail(self, toEmail: str, resetToken: str, expiresAt: str) -> None:
+        self.queuedMessages.append(
+            {
+                "toEmail": toEmail,
+                "resetToken": resetToken,
+                "expiresAt": expiresAt,
+            }
+        )
 
 
 class RF07Service:
     def __init__(
         self,
         authService: AuthService,
-        emailSender: object,
+        emailSender: PasswordResetEmailSender,
         nowProvider: callable,
         tokenTtlHours: int = 1,
     ) -> None:
@@ -63,15 +83,6 @@ class RF07Service:
     def _hashToken(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def _sendPasswordReset(self, *, email: str, token: str, expiresAt: str) -> None:
-        if hasattr(self.emailSender, "sendPasswordReset"):
-            self.emailSender.sendPasswordReset(email=email, token=token, expiresAt=expiresAt)
-            return
-        if hasattr(self.emailSender, "sendPasswordResetEmail"):
-            self.emailSender.sendPasswordResetEmail(email=email, token=token, expiresAt=expiresAt)
-            return
-        raise AttributeError("emailSender sem método de envio suportado")
-
     def requestPasswordReset(self, email: str) -> None:
         normalizedEmail = self._normalizeEmail(email)
         user = self.authService.findUserByEmail(normalizedEmail)
@@ -96,9 +107,9 @@ class RF07Service:
             ),
         )
         self.connection.commit()
-        self._sendPasswordReset(
-            email=str(user["email"]),
-            token=rawToken,
+        self.emailSender.sendPasswordResetEmail(
+            toEmail=str(user["email"]),
+            resetToken=rawToken,
             expiresAt=expiresAt.isoformat(),
         )
 
