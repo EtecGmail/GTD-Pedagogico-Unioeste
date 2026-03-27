@@ -20,6 +20,7 @@ class RF03Service:
             """
             CREATE TABLE IF NOT EXISTS reading_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 total_pages INTEGER NOT NULL,
                 deadline_days INTEGER NOT NULL,
                 daily_goal INTEGER NOT NULL,
@@ -29,13 +30,19 @@ class RF03Service:
             )
             """
         )
+        columns = self.connection.execute("PRAGMA table_info(reading_plans)").fetchall()
+        existingColumns = {str(column["name"]) for column in columns}
+        if "user_id" not in existingColumns:
+            self.connection.execute("ALTER TABLE reading_plans ADD COLUMN user_id INTEGER")
         self.connection.commit()
 
-    def createReadingPlan(self, totalPages: int, deadlineDays: int) -> int:
+    def createReadingPlan(self, totalPages: int, deadlineDays: int, userId: int | None = None) -> int:
         if totalPages <= 0:
             raise ValueError("total de páginas deve ser maior que zero")
         if deadlineDays <= 0:
             raise ValueError("prazo em dias deve ser maior que zero")
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário do plano de leitura é inválido")
 
         dailyGoal = math.ceil(totalPages / deadlineDays)
         isOverloaded = dailyGoal > 30
@@ -44,6 +51,7 @@ class RF03Service:
         cursor = self.connection.execute(
             """
             INSERT INTO reading_plans (
+                user_id,
                 total_pages,
                 deadline_days,
                 daily_goal,
@@ -51,28 +59,48 @@ class RF03Service:
                 remaining_pages,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (totalPages, deadlineDays, dailyGoal, int(isOverloaded), totalPages, createdAt),
+            (userId, totalPages, deadlineDays, dailyGoal, int(isOverloaded), totalPages, createdAt),
         )
         self.connection.commit()
         return int(cursor.lastrowid)
 
-    def listReadingPlans(self) -> list[dict[str, int | bool | str]]:
-        rows = self.connection.execute(
-            """
-            SELECT
-                id,
-                total_pages,
-                deadline_days,
-                daily_goal,
-                is_overloaded,
-                remaining_pages,
-                created_at
-            FROM reading_plans
-            ORDER BY created_at DESC, id DESC
-            """
-        ).fetchall()
+    def listReadingPlans(self, userId: int | None = None) -> list[dict[str, int | bool | str]]:
+        if userId is None:
+            rows = self.connection.execute(
+                """
+                SELECT
+                    id,
+                    total_pages,
+                    deadline_days,
+                    daily_goal,
+                    is_overloaded,
+                    remaining_pages,
+                    created_at
+                FROM reading_plans
+                ORDER BY created_at DESC, id DESC
+                """
+            ).fetchall()
+        else:
+            if userId <= 0:
+                raise ValueError("usuário do plano de leitura é inválido")
+            rows = self.connection.execute(
+                """
+                SELECT
+                    id,
+                    total_pages,
+                    deadline_days,
+                    daily_goal,
+                    is_overloaded,
+                    remaining_pages,
+                    created_at
+                FROM reading_plans
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (userId,),
+            ).fetchall()
         return [
             {
                 "id": int(row["id"]),
@@ -86,32 +114,59 @@ class RF03Service:
             for row in rows
         ]
 
-    def advanceReadingPlan(self, planId: int, pagesRead: int) -> dict[str, int | bool]:
+    def advanceReadingPlan(
+        self,
+        planId: int,
+        pagesRead: int,
+        userId: int | None = None,
+    ) -> dict[str, int | bool]:
         if pagesRead <= 0:
             raise ValueError("páginas lidas deve ser maior que zero")
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário do plano de leitura é inválido")
 
-        row = self.connection.execute(
-            """
-            SELECT id, remaining_pages
-            FROM reading_plans
-            WHERE id = ?
-            """,
-            (planId,),
-        ).fetchone()
+        if userId is None:
+            row = self.connection.execute(
+                """
+                SELECT id, remaining_pages
+                FROM reading_plans
+                WHERE id = ?
+                """,
+                (planId,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                """
+                SELECT id, remaining_pages
+                FROM reading_plans
+                WHERE id = ? AND user_id = ?
+                """,
+                (planId, userId),
+            ).fetchone()
         if row is None:
             raise LookupError("plano de leitura não encontrado")
 
         remainingPages = int(row["remaining_pages"])
         updatedRemainingPages = max(remainingPages - pagesRead, 0)
 
-        self.connection.execute(
-            """
-            UPDATE reading_plans
-            SET remaining_pages = ?
-            WHERE id = ?
-            """,
-            (updatedRemainingPages, planId),
-        )
+        if userId is None:
+            self.connection.execute(
+                """
+                UPDATE reading_plans
+                SET remaining_pages = ?
+                WHERE id = ?
+                """,
+                (updatedRemainingPages, planId),
+            )
+        else:
+            self.connection.execute(
+                """
+                UPDATE reading_plans
+                SET remaining_pages = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (updatedRemainingPages, planId, userId),
+            )
         self.connection.commit()
 
         return {

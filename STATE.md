@@ -192,3 +192,32 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Evoluir `SessionStore` para provider persistente/distribuído com TTL e revogação (compatível com bootstrap atual de conexão compartilhada).
 - Propagar autenticação/autorização por ownership para RF-03/RF-04/RF-05/RF-08 mantendo rollout incremental e revisável.
 - Iniciar RF-09 (logging de segurança administrativo) reutilizando os eventos já existentes de autenticação e autorização.
+
+- **27/03/2026 (consolidação de ownership em RF-03/RF-04/RF-05/RF-08)** – Evolução incremental via TDD estrito para propagar autenticação obrigatória e autorização por ownership nos módulos restantes do domínio antes de RF-09 e RF-10. Primeiro foram criados testes de serviço e HTTP cobrindo: (1) acesso autenticado aos próprios recursos, (2) rejeição sem autenticação (`401`), (3) rejeição consistente para recurso inexistente/não pertencente (`404` no avanço de leitura) e (4) isolamento por usuário em leitura, certificados, progresso ACC e dashboard. Em seguida, os serviços `RF03Service` e `RF04Service` receberam suporte de `userId` (schema com `user_id`, criação/listagem filtradas por usuário e avanço de leitura com ownership). Depois, `RF05Service` e `RF08Service` passaram a calcular métricas exclusivamente no contexto do `userId` autenticado. Por fim, os endpoints HTTP de `RF-03`, `RF-04`, `RF-05` e `RF-08` foram protegidos com `Depends(getCurrentUser)` e propagação de `userId` para as camadas de serviço, preservando o login blindado, sessão Bearer e rate limit já existentes.
+
+### Arquivos modificados no ciclo atual
+- `tests/test_rf03.py`
+- `tests/test_rf04.py`
+- `tests/test_rf05.py`
+- `tests/test_rf08.py`
+- `src/gtd_backend/rf03.py`
+- `src/gtd_backend/rf04.py`
+- `src/gtd_backend/rf05.py`
+- `src/gtd_backend/rf08.py`
+- `src/gtd_backend/http.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf03.py tests/test_rf04.py tests/test_rf05.py tests/test_rf08.py` (falha inicial esperada no TDD com `TypeError`/`assert` antes da implementação; sucesso após implementação).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- O padrão de ownership agora cobre os endpoints de RF-03, RF-04, RF-05 e RF-08 no backend HTTP, mas RF-01 ainda permanece sem autenticação/autorização explícita.
+- A persistência permanece em SQLite compartilhado nesta fase; para produção será necessário provider PostgreSQL com migrações formais.
+- `RF04Service` ainda usa `InMemoryCertificateStorage`; criptografia em repouso real (RNF-01) permanece pendente para ambiente produtivo.
+
+### Próximos passos
+- Aplicar autenticação/ownership também ao RF-01 para uniformizar a borda de domínio.
+- Iniciar RF-09 (log de segurança administrativo) aproveitando o `userId` autenticado já propagado no domínio.
+- Planejar RF-10 (alerta de cota) sobre storage persistente e criptografado.
