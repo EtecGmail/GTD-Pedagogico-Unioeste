@@ -18,7 +18,7 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | RF-04 | Cofre de ACCs (upload seguro de certificados ACC) | done | Codex | RF-04 implementado via TDD com validação explícita de tipo/tamanho, identificador único, abstração de storage e endpoints mínimos de upload/listagem. |
 | RF-05 | Barra de progresso das horas acumuladas | done | Codex | RF-05 implementado via TDD com `RF05Service` reutilizando certificados do RF-04 e endpoint `GET /rf05/acc-progress`. |
 | RF-06 | Categorização em "Próximas Ações" e "Aguardando" | done | Codex | RF-06 implementado via TDD com transição explícita (`inbox -> next_action|waiting`), rejeição de transições inválidas e endpoints mínimos para atualização/listagem por status. |
-| RF-07 | Recuperação de senha via e‑mail | done | Codex | RF-07 implementado via TDD com tokens temporários hasheados, fluxo cego na solicitação e confirmação com Argon2id + invalidação por uso/expiração. |
+| RF-07 | Recuperação de senha via e‑mail | done | Codex | RF-07 finalizado via TDD com tokens temporários hasheados, fluxo cego na solicitação e confirmação com Argon2id + invalidação por uso/expiração. |
 | RF-08 | Gráficos de avanço das leituras | done | Codex | Base backend-first implementada via TDD com agregação de dashboard e endpoint mínimo de avanço de leitura. |
 | RF-09 | Log de eventos de segurança | todo | — | — |
 | RF-10 | Alerta de 90 % de cota de armazenamento | todo | — | — |
@@ -117,3 +117,20 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 
 ### Próximos passos
 - Reaproveitar `AuthService.updatePassword` no fluxo de RF-07 para centralizar regra de senha/hashing e reduzir superfície de regressão.
+
+- **27/03/2026 (rf-07 / fechamento documental)** – Consolidação final do estado do RF-07 no `STATE.md`. O status do requisito foi mantido em **done** e o histórico foi atualizado com decisões explícitas de segurança do fluxo de recuperação de senha: **token com expiração**, **token de uso único** e **resposta cega** para evitar enumeração de contas. Também foi registrada a necessidade de integração futura com provedor real de e-mail para ambiente produtivo.
+
+### Arquivos modificados no ciclo atual
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf07.py` (sucesso: testes do fluxo RF-07 aprovados).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada neste ciclo).
+
+### Problemas/riscos remanescentes
+- O envio de e-mail ainda depende de implementação em memória/stub no ambiente atual; sem integração com provedor real não há garantia de entrega, reputação de domínio, observabilidade de bounce e políticas antiabuso completas em produção.
+- Em ambiente distribuído, o controle de tokens de reset exige persistência compartilhada e política de revogação consistente entre múltiplas instâncias.
+
+### Próximos passos
+- Integrar RF-07 com provedor real de e-mail (ex.: SMTP transacional/API dedicada), incluindo autenticação segura, templates versionados e telemetria de entrega.
+- Definir estratégia de retentativa/idempotência para envio de e-mails de reset sem vazar informações sensíveis ao cliente.
