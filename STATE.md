@@ -98,3 +98,22 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Evoluir políticas antiabuso do RF-07 (rate limit multicamada e observabilidade de padrões).
 - Preparar persistência compartilhada para tokens de reset e demais serviços stateful.
+
+- **27/03/2026 (auth/updatePassword)** – Implementação via TDD do método `updatePassword(userId, newPlainPassword)` no `AuthService`. Primeiro foi adicionado teste unitário cobrindo atualização de hash, autenticação bem-sucedida com a nova senha e falha da senha antiga com mensagem genérica (`credenciais inválidas`). Em seguida, o serviço foi ajustado para validar política mínima de senha (>= 8, após `strip`), gerar novo hash Argon2id e persistir por `user_id` reaproveitando `updateUserPasswordHash`, mantendo erro controlado para usuário inexistente. Não foram adicionados logs no fluxo para evitar vazamento de senha/token.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/auth.py`
+- `tests/test_auth.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_auth.py -k atualizar_hash` (falha esperada no TDD antes da implementação: `AttributeError` para método inexistente).
+- `poetry run pytest -q tests/test_auth.py` (sucesso).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- A política de senha mínima está validada no `AuthService` para `updatePassword`, mas ainda existe validação equivalente em `RF07Service`; vale consolidar em ponto único no futuro para reduzir duplicação de regra.
+
+### Próximos passos
+- Reaproveitar `AuthService.updatePassword` no fluxo de RF-07 para centralizar regra de senha/hashing e reduzir superfície de regressão.

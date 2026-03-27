@@ -42,6 +42,12 @@ class AuthService:
         except (VerifyMismatchError, VerificationError):
             return False
 
+    def _validatePasswordPolicy(self, plainPassword: str) -> str:
+        normalizedPassword = plainPassword.strip()
+        if len(normalizedPassword) < 8:
+            raise ValueError(CREDENCIAIS_INVALIDAS)
+        return normalizedPassword
+
     def register_user(self, email: str, plain_password: str) -> int:
         passwordHash = self.passwordHasher.hash(plain_password)
         cursor = self.connection.execute(
@@ -86,6 +92,11 @@ class AuthService:
         if cursor.rowcount == 0:
             raise ValueError("usuário não encontrado")
         self.connection.commit()
+
+    def updatePassword(self, userId: int, newPlainPassword: str) -> None:
+        validatedPassword = self._validatePasswordPolicy(newPlainPassword)
+        newPasswordHash = self.passwordHasher.hash(validatedPassword)
+        self.updateUserPasswordHash(userId, newPasswordHash)
 
     def get_password_hash(self, user_id: int) -> str:
         row = self.connection.execute(
