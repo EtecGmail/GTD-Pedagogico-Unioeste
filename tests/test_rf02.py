@@ -15,6 +15,7 @@ def test_rf02_service_deve_capturar_e_listar_item_na_caixa_de_entrada() -> None:
     assert service.listInboxItems() == [
         {
             "id": itemId,
+            "userId": None,
             "content": "Ler capítulo 3 de Didática",
             "status": "inbox",
             "createdAt": "2026-03-26T12:00:00+00:00",
@@ -47,6 +48,19 @@ def test_rf02_service_deve_rejeitar_conteudo_invalido() -> None:
         assert False, "esperava erro para conteúdo vazio"
     except ValueError as error:
         assert str(error) == "conteúdo da captura é obrigatório"
+
+
+def test_rf02_service_deve_preparar_associacao_por_usuario() -> None:
+    service = RF02Service(nowProvider=lambda: datetime(2026, 3, 26, 12, 0, tzinfo=UTC))
+
+    itemUser1 = service.captureInboxItem(content="Ler texto A", userId=1)
+    service.captureInboxItem(content="Ler texto B", userId=2)
+
+    itensUser1 = service.listInboxItems(userId=1)
+
+    assert len(itensUser1) == 1
+    assert itensUser1[0]["id"] == itemUser1
+    assert itensUser1[0]["userId"] == 1
 
 
 def test_rf02_http_deve_capturar_e_listar_itens_da_caixa_de_entrada() -> None:

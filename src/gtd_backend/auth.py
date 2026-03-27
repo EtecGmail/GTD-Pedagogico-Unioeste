@@ -16,8 +16,8 @@ class AuthResult:
 class AuthService:
     """Serviço de autenticação com login blindado e Argon2id."""
 
-    def __init__(self) -> None:
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+        self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.passwordHasher = PasswordHasher()
         self.dummyHash = self.passwordHasher.hash("senha-falsa-para-timing-attack")

@@ -134,3 +134,34 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Integrar RF-07 com provedor real de e-mail (ex.: SMTP transacional/API dedicada), incluindo autenticação segura, templates versionados e telemetria de entrega.
 - Definir estratégia de retentativa/idempotência para envio de e-mails de reset sem vazar informações sensíveis ao cliente.
+
+- **27/03/2026 (sprint de consolidação técnica / persistência compartilhada)** – Evolução incremental da base de persistência via TDD para reduzir acoplamento a SQLite em memória por serviço. Primeiro foram escritos testes novos cobrindo (1) preparação de ownership em `RF02Service` com `userId` e filtro por usuário e (2) persistência compartilhada entre instâncias de aplicação com SQLite em arquivo (`databaseUrl`). Em seguida, foi criada a infraestrutura `persistence.py` com `createSqliteConnection`, e os serviços centrais stateful (`AuthService`, `RF01Service`, `RF02Service`, `RF03Service`, `RF04Service`, `RF07Service`) passaram a aceitar conexão injetável. A função `createApp` agora injeta **uma única conexão compartilhada** para toda a aplicação, eliminando o banco isolado por serviço e preparando migração incremental para provider PostgreSQL em produção. Também foi adicionada coluna `user_id` em `inbox_items` com migração leve (`ALTER TABLE` quando necessário) para iniciar associação de dados por usuário sem quebrar contratos atuais da API.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `src/gtd_backend/http.py`
+- `src/gtd_backend/auth.py`
+- `src/gtd_backend/rf01.py`
+- `src/gtd_backend/rf02.py`
+- `src/gtd_backend/rf03.py`
+- `src/gtd_backend/rf04.py`
+- `src/gtd_backend/rf07.py`
+- `tests/test_rf02.py`
+- `tests/test_persistence.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf02.py tests/test_persistence.py` (falha esperada no TDD antes da implementação; depois sucesso: `7 passed`).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- A infraestrutura compartilhada atual cobre SQLite; o provider de conexão PostgreSQL ainda precisa ser conectado no deploy de produção (sem alterar regras de domínio).
+- Endpoints de domínio permanecem sem autenticação/autorização; a base foi preparada com `user_id` em Caixa de Entrada, mas falta enforcement no HTTP.
+- `RF04Service` ainda usa storage de arquivo em memória (`InMemoryCertificateStorage`), portanto RNF-01 (criptografia em repouso real) continua pendente.
+
+### Próximos passos
+- Adicionar provider de conexão PostgreSQL no bootstrap de produção reutilizando o contrato de conexão atual.
+- Aplicar autenticação/autorização nos endpoints de domínio e propagar `userId` autenticado para `RF02Service`.
+- Expandir a estratégia de ownership para módulos restantes (leituras, certificados, dashboards) com migração incremental e cobertura de testes.
