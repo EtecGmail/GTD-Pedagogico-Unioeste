@@ -17,6 +17,7 @@ from gtd_backend.rf03 import RF03Service
 from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
 from gtd_backend.rf05 import RF05Service
 from gtd_backend.rf06 import RF06Service
+from gtd_backend.rf08 import RF08Service
 
 logger = logging.getLogger("gtd_backend.auth_http")
 
@@ -216,6 +217,39 @@ class AccHoursProgressResponse(BaseModel):
     isCompleted: bool
 
 
+class DashboardStatusCountsResponse(BaseModel):
+    inbox: int
+    nextAction: int
+    waiting: int
+
+
+class DashboardReadingSummaryResponse(BaseModel):
+    totalPlans: int
+    overloadedPlans: int
+    completedPlans: int
+    totalPages: int
+    remainingPages: int
+    averageCompletionPercentage: float
+
+
+class StudentDashboardResponse(BaseModel):
+    statusCounts: DashboardStatusCountsResponse
+    accProgress: AccHoursProgressResponse
+    readingSummary: DashboardReadingSummaryResponse
+
+
+class AdvanceReadingPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pagesRead: int = Field(gt=0, le=100000)
+
+
+class AdvanceReadingPlanResponse(BaseModel):
+    id: int
+    remainingPages: int
+    isCompleted: bool
+
+
 class RateLimiter:
     def allow(self, key: str, now: float | None = None) -> bool:
         raise NotImplementedError
@@ -269,6 +303,11 @@ def createApp(
     app.state.rf04Service = RF04Service(storage=InMemoryCertificateStorage())
     app.state.rf05Service = RF05Service(rf04Service=app.state.rf04Service, defaultTargetHours=200)
     app.state.rf06Service = RF06Service(rf02Service=app.state.rf02Service)
+    app.state.rf08Service = RF08Service(
+        rf03Service=app.state.rf03Service,
+        rf05Service=app.state.rf05Service,
+        rf06Service=app.state.rf06Service,
+    )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
     app.state.nowProvider = nowProvider or time.time
 
@@ -481,5 +520,33 @@ def createApp(
                 content={"success": False, "message": str(error)},
             )
         return AccHoursProgressResponse(**progress)
+
+    @app.get("/rf08/dashboard", response_model=StudentDashboardResponse)
+    def getStudentDashboard(targetHours: int | None = Query(default=None, gt=0, le=10000)):
+        dashboard = app.state.rf08Service.getStudentDashboard(targetHours=targetHours)
+        return StudentDashboardResponse(**dashboard)
+
+    @app.patch(
+        "/rf08/reading-plans/{planId}/advance",
+        response_model=AdvanceReadingPlanResponse,
+        responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    )
+    def advanceReadingPlan(planId: int, request: AdvanceReadingPlanRequest):
+        try:
+            updatedReadingPlan = app.state.rf03Service.advanceReadingPlan(
+                planId=planId,
+                pagesRead=request.pagesRead,
+            )
+        except LookupError as error:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "message": str(error)},
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": str(error)},
+            )
+        return AdvanceReadingPlanResponse(**updatedReadingPlan)
 
     return app
