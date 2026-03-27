@@ -81,3 +81,37 @@ class RF03Service:
             }
             for row in rows
         ]
+
+    def advanceReadingPlan(self, planId: int, pagesRead: int) -> dict[str, int | bool]:
+        if pagesRead <= 0:
+            raise ValueError("páginas lidas deve ser maior que zero")
+
+        row = self.connection.execute(
+            """
+            SELECT id, remaining_pages
+            FROM reading_plans
+            WHERE id = ?
+            """,
+            (planId,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("plano de leitura não encontrado")
+
+        remainingPages = int(row["remaining_pages"])
+        updatedRemainingPages = max(remainingPages - pagesRead, 0)
+
+        self.connection.execute(
+            """
+            UPDATE reading_plans
+            SET remaining_pages = ?
+            WHERE id = ?
+            """,
+            (updatedRemainingPages, planId),
+        )
+        self.connection.commit()
+
+        return {
+            "id": int(planId),
+            "remainingPages": updatedRemainingPages,
+            "isCompleted": updatedRemainingPages == 0,
+        }

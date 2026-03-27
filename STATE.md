@@ -19,10 +19,10 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 | RF-05 | Barra de progresso das horas acumuladas | done | Codex | RF-05 implementado via TDD com `RF05Service` reutilizando certificados do RF-04 e endpoint `GET /rf05/acc-progress`. |
 | RF-06 | Categorização em "Próximas Ações" e "Aguardando" | done | Codex | RF-06 implementado via TDD com transição explícita (`inbox -> next_action|waiting`), rejeição de transições inválidas e endpoints mínimos para atualização/listagem por status. |
 | RF-07 | Recuperação de senha via e‑mail | todo | — | — |
-| RF-08 | Gráficos de avanço das leituras | todo | — | — |
+| RF-08 | Gráficos de avanço das leituras | done | Codex | Base backend-first implementada via TDD com agregação de dashboard e endpoint mínimo de avanço de leitura. |
 | RF-09 | Log de eventos de segurança | todo | — | — |
 | RF-10 | Alerta de 90 % de cota de armazenamento | todo | — | — |
-| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega do RF-06 e validações executadas. |
+| DOC-UPDATE | Manter documentos atualizados com mudanças e decisões | in-progress | Codex | `STATE.md` atualizado neste ciclo com a entrega da base do RF-08 e validações executadas. |
 
 ## Histórico
 
@@ -44,18 +44,19 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - **26/03/2026 (fase 3 / rf-05)** – Implementação do RF-05 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para cálculo de progresso ACC com `totalHours`, `targetHours`, `remainingHours`, `percentage` e `isCompleted`, incluindo casos sem certificados, meta ultrapassada e validação explícita de meta inválida. Em seguida, foi implementado `RF05Service` reutilizando `RF04Service` para agregação de horas sem duplicar persistência. Por fim, endpoint mínimo foi adicionado em FastAPI: `GET /rf05/acc-progress` com `targetHours` opcional para consumo futuro por dashboard/termômetro visual. Suíte final: `38 passed`.
 
 - **26/03/2026 (fase 3 / rf-06)** – Implementação do RF-06 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para transições de status da Caixa de Entrada (`inbox -> next_action` e `inbox -> waiting`), listagem por categoria, rejeição de item inexistente e rejeição de payload inválido/incompleto. Em seguida, foi implementado `RF06Service` reutilizando a persistência do `RF02Service`, com regras explícitas de transição e validação de status suportados. Por fim, endpoints mínimos foram adicionados em FastAPI: `PATCH /rf06/inbox-items/{itemId}/status` e `GET /rf06/inbox-items?status=...`. Suíte final: `48 passed`.
+- **27/03/2026 (fase 3 / rf-08, backend-first)** – Implementação da base do RF-08 via TDD estrito. Primeiro foram criados testes de serviço e HTTP para agregação do dashboard do estudante e para avanço de leitura, cobrindo cenários com e sem dados, validação explícita e rejeição de plano inexistente. Em seguida, foi implementado `RF08Service` reutilizando RF-06 (contagens por status), RF-05 (progresso de ACC) e RF-03 (resumo de leitura). Também foi estendido o `RF03Service` com `advanceReadingPlan` para atualização controlada de `remainingPages`. Por fim, endpoints mínimos foram adicionados em FastAPI: `GET /rf08/dashboard` e `PATCH /rf08/reading-plans/{planId}/advance`. Suíte final: `52 passed`.
 
 ### Arquivos modificados no ciclo atual
 - `src/gtd_backend/http.py`
-- `src/gtd_backend/rf02.py`
-- `src/gtd_backend/rf06.py`
-- `tests/test_rf06.py`
+- `src/gtd_backend/rf03.py`
+- `src/gtd_backend/rf08.py`
+- `tests/test_rf08.py`
 - `STATE.md`
 
 ### Comandos executados e resultados
-- `poetry run pytest -q tests/test_rf06.py` (falha esperada no ciclo TDD após criação dos testes: `ModuleNotFoundError: No module named 'gtd_backend.rf06'`).
-- `poetry run pytest -q tests/test_rf06.py` (sucesso após implementação incremental de serviço e endpoints: `10 passed`).
-- `poetry run pytest -q` (sucesso: `48 passed`).
+- `poetry run pytest -q tests/test_rf08.py` (falha esperada no ciclo TDD após criação dos testes: `ModuleNotFoundError: No module named 'gtd_backend.rf08'`).
+- `poetry run pytest -q tests/test_rf08.py` (sucesso após implementação incremental de serviço e endpoints: `4 passed`).
+- `poetry run pytest -q` (sucesso: `52 passed`).
 - `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
 
 ### Problemas/riscos remanescentes
@@ -67,9 +68,10 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - As transições de RF-06 estão restritas a `inbox -> next_action|waiting`; se houver necessidade futura de retorno para `inbox` ou transições entre categorias, será necessário explicitar nova política e cobertura de testes.
 - O `RF04Service` usa storage em memória sem criptografia em repouso nesta etapa; a abstração `CertificateStorage` foi criada para permitir evolução segura sem refatoração ampla (RNF-01 pendente).
 - O endpoint HTTP de upload do RF-04 foi implementado com JSON (`contentBase64`) por limitação de dependência de ambiente (`python-multipart` indisponível sem rede); para produção mobile/câmera, migrar para `multipart/form-data` assim que a dependência estiver disponível.
+- O resumo de leitura no RF-08 usa agregação simples sobre os planos existentes; para gráficos temporais completos (timeline/ritmo diário), será necessário persistir histórico de avanço por data.
 
 ### Próximos passos
-- Integrar as categorias de RF-06 (`inbox`, `next_action`, `waiting`) ao dashboard do estudante para métricas de carga mental e acompanhamento GTD.
+- Evoluir RF-08 para série temporal de avanço de leitura (gráfico dinâmico real), mantendo o endpoint agregado já entregue.
 - Evoluir `CertificateStorage` para provider persistente com criptografia em repouso (RNF-01), mantendo contrato atual.
 - Planejar migração do endpoint de upload para `multipart/form-data` com suporte mobile/câmera e validação de assinatura mágica de arquivo (defesa em profundidade).
 - Definir camada de persistência compartilhada para evitar múltiplos bancos em memória por serviço conforme avanço da fase 3.
