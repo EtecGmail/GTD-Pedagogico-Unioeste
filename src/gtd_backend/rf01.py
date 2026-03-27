@@ -13,21 +13,35 @@ class RF01Service:
             """
             CREATE TABLE IF NOT EXISTS professors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 name TEXT NOT NULL,
-                normalized_name TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE
+                normalized_name TEXT NOT NULL,
+                email TEXT NOT NULL
             )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_professors_user_name
+            ON professors (user_id, normalized_name)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_professors_user_email
+            ON professors (user_id, email)
             """
         )
         self.connection.execute(
             """
             CREATE TABLE IF NOT EXISTS disciplines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 name TEXT NOT NULL,
                 normalized_name TEXT NOT NULL,
                 code TEXT NOT NULL,
                 normalized_code TEXT NOT NULL,
-                UNIQUE(normalized_name, normalized_code)
+                UNIQUE(user_id, normalized_name, normalized_code)
             )
             """
         )
@@ -47,22 +61,48 @@ class RF01Service:
     def _normalizeText(self, value: str) -> str:
         return " ".join(value.strip().split())
 
-    def createProfessor(self, name: str, email: str) -> int:
+    def _validateUserId(self, userId: int | None) -> None:
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário inválido")
+
+    def createProfessor(self, name: str, email: str, userId: int | None = None) -> int:
         normalizedName = self._normalizeText(name)
         normalizedEmail = email.strip().lower()
+        self._validateUserId(userId)
 
         if not normalizedName:
             raise ValueError("nome do professor é obrigatório")
         if "@" not in normalizedEmail:
             raise ValueError("email do professor inválido")
 
+        if userId is None:
+            existingRow = self.connection.execute(
+                """
+                SELECT id
+                FROM professors
+                WHERE user_id IS NULL AND (normalized_name = ? OR email = ?)
+                """,
+                (normalizedName.lower(), normalizedEmail),
+            ).fetchone()
+        else:
+            existingRow = self.connection.execute(
+                """
+                SELECT id
+                FROM professors
+                WHERE user_id = ? AND (normalized_name = ? OR email = ?)
+                """,
+                (userId, normalizedName.lower(), normalizedEmail),
+            ).fetchone()
+        if existingRow is not None:
+            raise ValueError("professor já cadastrado")
+
         try:
             cursor = self.connection.execute(
                 """
-                INSERT INTO professors (name, normalized_name, email)
-                VALUES (?, ?, ?)
+                INSERT INTO professors (user_id, name, normalized_name, email)
+                VALUES (?, ?, ?, ?)
                 """,
-                (normalizedName, normalizedName.lower(), normalizedEmail),
+                (userId, normalizedName, normalizedName.lower(), normalizedEmail),
             )
             self.connection.commit()
             return int(cursor.lastrowid)
@@ -74,22 +114,45 @@ class RF01Service:
         name: str,
         code: str,
         professorIds: Sequence[int] | None = None,
+        userId: int | None = None,
     ) -> int:
         normalizedName = self._normalizeText(name)
         normalizedCode = code.strip().upper()
+        self._validateUserId(userId)
 
         if not normalizedName:
             raise ValueError("nome da disciplina é obrigatório")
         if not normalizedCode:
             raise ValueError("código da disciplina é obrigatório")
 
+        if userId is None:
+            existingRow = self.connection.execute(
+                """
+                SELECT id
+                FROM disciplines
+                WHERE user_id IS NULL AND normalized_name = ? AND normalized_code = ?
+                """,
+                (normalizedName.lower(), normalizedCode),
+            ).fetchone()
+        else:
+            existingRow = self.connection.execute(
+                """
+                SELECT id
+                FROM disciplines
+                WHERE user_id = ? AND normalized_name = ? AND normalized_code = ?
+                """,
+                (userId, normalizedName.lower(), normalizedCode),
+            ).fetchone()
+        if existingRow is not None:
+            raise ValueError("disciplina já cadastrada")
+
         try:
             cursor = self.connection.execute(
                 """
-                INSERT INTO disciplines (name, normalized_name, code, normalized_code)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO disciplines (user_id, name, normalized_name, code, normalized_code)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (normalizedName, normalizedName.lower(), normalizedCode, normalizedCode),
+                (userId, normalizedName, normalizedName.lower(), normalizedCode, normalizedCode),
             )
         except sqlite3.IntegrityError as error:
             raise ValueError("disciplina já cadastrada") from error
@@ -97,20 +160,37 @@ class RF01Service:
         disciplineId = int(cursor.lastrowid)
 
         if professorIds:
-            self._bindProfessorsToDiscipline(disciplineId=disciplineId, professorIds=professorIds)
+            self._bindProfessorsToDiscipline(
+                disciplineId=disciplineId,
+                professorIds=professorIds,
+                userId=userId,
+            )
 
         self.connection.commit()
         return disciplineId
 
-    def _bindProfessorsToDiscipline(self, disciplineId: int, professorIds: Sequence[int]) -> None:
+    def _bindProfessorsToDiscipline(
+        self,
+        disciplineId: int,
+        professorIds: Sequence[int],
+        userId: int | None = None,
+    ) -> None:
         uniqueProfessorIds = sorted(set(professorIds))
 
-        rows = self.connection.execute(
-            "SELECT id FROM professors WHERE id IN ({})".format(
-                ",".join(["?"] * len(uniqueProfessorIds))
-            ),
-            tuple(uniqueProfessorIds),
-        ).fetchall()
+        if userId is None:
+            rows = self.connection.execute(
+                "SELECT id FROM professors WHERE user_id IS NULL AND id IN ({})".format(
+                    ",".join(["?"] * len(uniqueProfessorIds))
+                ),
+                tuple(uniqueProfessorIds),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT id FROM professors WHERE user_id = ? AND id IN ({})".format(
+                    ",".join(["?"] * len(uniqueProfessorIds))
+                ),
+                (userId, *uniqueProfessorIds),
+            ).fetchall()
 
         foundProfessorIds = {int(row["id"]) for row in rows}
         if foundProfessorIds != set(uniqueProfessorIds):
@@ -125,10 +205,17 @@ class RF01Service:
                 (disciplineId, professorId),
             )
 
-    def listProfessors(self) -> list[dict[str, int | str]]:
-        rows = self.connection.execute(
-            "SELECT id, name, email FROM professors ORDER BY id ASC"
-        ).fetchall()
+    def listProfessors(self, userId: int | None = None) -> list[dict[str, int | str]]:
+        self._validateUserId(userId)
+        if userId is None:
+            rows = self.connection.execute(
+                "SELECT id, name, email FROM professors WHERE user_id IS NULL ORDER BY id ASC"
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT id, name, email FROM professors WHERE user_id = ? ORDER BY id ASC",
+                (userId,),
+            ).fetchall()
 
         return [
             {
@@ -139,10 +226,17 @@ class RF01Service:
             for row in rows
         ]
 
-    def listDisciplines(self) -> list[dict[str, int | str | list[int]]]:
-        rows = self.connection.execute(
-            "SELECT id, name, code FROM disciplines ORDER BY id ASC"
-        ).fetchall()
+    def listDisciplines(self, userId: int | None = None) -> list[dict[str, int | str | list[int]]]:
+        self._validateUserId(userId)
+        if userId is None:
+            rows = self.connection.execute(
+                "SELECT id, name, code FROM disciplines WHERE user_id IS NULL ORDER BY id ASC"
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT id, name, code FROM disciplines WHERE user_id = ? ORDER BY id ASC",
+                (userId,),
+            ).fetchall()
 
         disciplines: list[dict[str, int | str | list[int]]] = []
         for row in rows:

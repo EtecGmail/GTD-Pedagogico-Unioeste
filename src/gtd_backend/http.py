@@ -557,11 +557,15 @@ def createApp(
         status_code=201,
         responses={400: {"model": ErrorResponse}},
     )
-    def createProfessor(request: CreateProfessorRequest):
+    def createProfessor(
+        request: CreateProfessorRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             professorId = app.state.rf01Service.createProfessor(
                 name=request.name,
                 email=request.email,
+                userId=currentUser.userId,
             )
         except ValueError as error:
             return JSONResponse(
@@ -571,8 +575,8 @@ def createApp(
         return CreateProfessorResponse(id=professorId)
 
     @app.get("/rf01/professors", response_model=list[ProfessorListItem])
-    def listProfessors():
-        return app.state.rf01Service.listProfessors()
+    def listProfessors(currentUser: CurrentUser = Depends(getCurrentUser)):
+        return app.state.rf01Service.listProfessors(userId=currentUser.userId)
 
     @app.post(
         "/rf01/disciplines",
@@ -580,12 +584,16 @@ def createApp(
         status_code=201,
         responses={400: {"model": ErrorResponse}},
     )
-    def createDiscipline(request: CreateDisciplineRequest):
+    def createDiscipline(
+        request: CreateDisciplineRequest,
+        currentUser: CurrentUser = Depends(getCurrentUser),
+    ):
         try:
             disciplineId = app.state.rf01Service.createDiscipline(
                 name=request.name,
                 code=request.code,
                 professorIds=request.professorIds,
+                userId=currentUser.userId,
             )
         except ValueError as error:
             return JSONResponse(
@@ -595,8 +603,8 @@ def createApp(
         return CreateDisciplineResponse(id=disciplineId)
 
     @app.get("/rf01/disciplines", response_model=list[DisciplineListItem])
-    def listDisciplines():
-        return app.state.rf01Service.listDisciplines()
+    def listDisciplines(currentUser: CurrentUser = Depends(getCurrentUser)):
+        return app.state.rf01Service.listDisciplines(userId=currentUser.userId)
 
     @app.post(
         "/rf02/inbox-items",

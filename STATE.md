@@ -221,3 +221,26 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Aplicar autenticação/ownership também ao RF-01 para uniformizar a borda de domínio.
 - Iniciar RF-09 (log de segurança administrativo) aproveitando o `userId` autenticado já propagado no domínio.
 - Planejar RF-10 (alerta de cota) sobre storage persistente e criptografado.
+
+- **27/03/2026 (auditoria técnica de hardening / RF-01 crítico)** – Auditoria dirigida por risco executada com foco em autenticação/autorização, ownership, consistência HTTP e regressões da persistência compartilhada. Foi confirmada falha crítica em RF-01: endpoints sem autenticação e domínio sem isolamento por usuário, permitindo duplicidade global e potencial vazamento cruzado. Correção aplicada via TDD: primeiro foram adicionados testes de regressão de serviço/HTTP para autenticação obrigatória em `/rf01/*`, isolamento entre usuários, duplicidade por contexto de usuário e bloqueio de vínculo disciplina-professor entre contas diferentes. Em seguida, `RF01Service` foi ajustado para propagar `userId` no cadastro/listagem de professores e disciplinas, aplicar validação de ownership em vínculos e escopo de duplicidade por usuário. Por fim, endpoints HTTP de RF-01 passaram a exigir `Bearer` (`Depends(getCurrentUser)`) e a encaminhar `userId` autenticado ao domínio. O teste de persistência compartilhada foi atualizado para autenticar corretamente as chamadas de RF-01 após o hardening.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/rf01.py`
+- `src/gtd_backend/http.py`
+- `tests/test_rf01.py`
+- `tests/test_persistence.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf01.py` (falha inicial esperada no TDD antes da implementação; sucesso após correções: `10 passed`).
+- `poetry run pytest -q tests/test_persistence.py tests/test_rf01.py` (falha inicial de regressão por autenticação obrigatória em RF-01; sucesso após ajuste do teste de persistência).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- `AuthService.register_user` ainda pode propagar `sqlite3.IntegrityError` diretamente em duplicidade de e-mail; recomenda-se padronizar para erro de domínio consistente em camada de serviço.
+- O controle de sessão Bearer continua em memória por processo; para produção/multi-instância permanece necessário backend compartilhado com expiração e revogação centralizadas.
+
+### Próximos passos
+- Expandir auditoria técnica para consolidar padronização de erros de domínio (evitar vazamento de exceções de infraestrutura para chamadas internas).
+- Planejar provider de sessão/token persistente com TTL/revogação e integração com persistência compartilhada.
