@@ -67,6 +67,26 @@ class AuthService:
 
         return AuthResult(success=True, message="login realizado com sucesso")
 
+
+    def findUserByEmail(self, email: str) -> dict[str, int | str] | None:
+        normalizedEmail = email.lower().strip()
+        row = self.connection.execute(
+            "SELECT id, email FROM users WHERE email = ?",
+            (normalizedEmail,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"id": int(row["id"]), "email": str(row["email"])}
+
+    def updateUserPasswordHash(self, userId: int, passwordHash: str) -> None:
+        cursor = self.connection.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (passwordHash, userId),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("usuário não encontrado")
+        self.connection.commit()
+
     def get_password_hash(self, user_id: int) -> str:
         row = self.connection.execute(
             "SELECT password_hash FROM users WHERE id = ?", (user_id,)
