@@ -7,9 +7,11 @@ from fastapi.testclient import TestClient
 from gtd_backend.auth import DuplicateEmailError
 from gtd_backend.http import createApp
 from gtd_backend.persistence import (
+    PostgresqlConnectionCompat,
     PersistenceConfigurationError,
     applyMigrations,
     createDatabaseConnection,
+    hasTableColumn,
     resolveDatabaseUrl,
 )
 
@@ -144,3 +146,71 @@ def test_apply_migrations_deve_criar_tabelas_principais_necessarias(tmp_path: Pa
     ).fetchall()
     createdTables = {str(row[0]) for row in rows}
     assert expectedTables.issubset(createdTables)
+
+
+def test_postgresql_connection_compat_deve_adaptar_paramstyle_qmark_para_percent_s() -> None:
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+            self._rows = rows or []
+            self.rowcount = 1
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeRawConnection:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple]] = []
+
+        def execute(self, query: str, params: tuple = ()):
+            self.executed.append((query, params))
+            if query.startswith("SELECT currval"):
+                return FakeCursor([{"id": 7}])
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+    raw = FakeRawConnection()
+    connection = PostgresqlConnectionCompat(rawConnection=raw)
+
+    cursor = connection.execute("INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)", ("a", "b", "c"))
+
+    assert raw.executed[0] == (
+        "INSERT INTO users (email, password_hash, role) VALUES (%s, %s, %s)",
+        ("a", "b", "c"),
+    )
+    assert "pg_get_serial_sequence('users', 'id')" in raw.executed[1][0]
+    assert cursor.lastrowid == 7
+
+
+def test_has_table_column_deve_consultar_information_schema_em_postgresql() -> None:
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, str]]) -> None:
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class FakePostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def __init__(self) -> None:
+            self.query: str | None = None
+            self.params: tuple | None = None
+
+        def execute(self, query: str, params: tuple | None = None):
+            self.query = query
+            self.params = params
+            return FakeCursor([{"column_name": "role"}])
+
+        def commit(self) -> None:
+            pass
+
+    connection = FakePostgresConnection()
+
+    assert hasTableColumn(connection=connection, tableName="users", columnName="role") is True
+    assert "information_schema.columns" in str(connection.query)
+    assert connection.params == ("users",)

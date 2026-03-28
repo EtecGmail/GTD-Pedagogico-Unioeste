@@ -1,9 +1,10 @@
 import os
 import sqlite3
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 
@@ -27,6 +28,101 @@ class DbConnectionProtocol(Protocol):
 
     def commit(self) -> None:
         ...
+
+
+def getConnectionDialect(connection: object) -> str:
+    explicitDialect = getattr(connection, "__gtd_dialect__", None)
+    if isinstance(explicitDialect, str) and explicitDialect in {"sqlite", "postgresql"}:
+        return explicitDialect
+    if isinstance(connection, sqlite3.Connection):
+        return "sqlite"
+    return "postgresql"
+
+
+def hasTableColumn(connection: DbConnectionProtocol, tableName: str, columnName: str) -> bool:
+    dialect = getConnectionDialect(connection)
+    if dialect == "sqlite":
+        rows = connection.execute(f"PRAGMA table_info({tableName})").fetchall()
+        existingColumns = {str(row["name"]) for row in rows}
+        return columnName in existingColumns
+
+    rows = connection.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (tableName,),
+    ).fetchall()
+    existingColumns = {str(row["column_name"]) if isinstance(row, dict) else str(row[0]) for row in rows}
+    return columnName in existingColumns
+
+
+def _adaptQueryToDialect(query: str, dialect: str) -> str:
+    if dialect != "postgresql":
+        return query
+    return query.replace("?", "%s")
+
+
+class PostgresqlCursorCompat:
+    def __init__(self, cursor: object, lastrowid: int | None = None) -> None:
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        return int(getattr(self._cursor, "rowcount", 0))
+
+    def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> list[object]:
+        return list(self._cursor.fetchall())
+
+
+class PostgresqlConnectionCompat:
+    __gtd_dialect__ = "postgresql"
+
+    def __init__(self, rawConnection: object) -> None:
+        self._rawConnection = rawConnection
+
+    def commit(self) -> None:
+        self._rawConnection.commit()
+
+    def _resolveLastRowId(self, query: str) -> int | None:
+        normalizedQuery = " ".join(query.strip().split()).lower()
+        if not normalizedQuery.startswith("insert into "):
+            return None
+        tableMatch = re.match(r"insert\s+into\s+([a-zA-Z_][a-zA-Z0-9_]*)", normalizedQuery)
+        if tableMatch is None:
+            return None
+        tableName = tableMatch.group(1)
+        try:
+            idCursor = self._rawConnection.execute(
+                f"SELECT currval(pg_get_serial_sequence('{tableName}', 'id')) AS id"
+            )
+            row = idCursor.fetchone()
+            if row is None:
+                return None
+            if isinstance(row, dict):
+                return int(row["id"])
+            return int(row[0])
+        except Exception:
+            return None
+
+    def execute(self, query: str, params: tuple | None = None) -> PostgresqlCursorCompat:
+        adaptedQuery = _adaptQueryToDialect(query=query, dialect="postgresql")
+        try:
+            cursor = self._rawConnection.execute(adaptedQuery, params or ())
+        except Exception as error:
+            try:
+                from psycopg import IntegrityError as PsycopgIntegrityError
+            except Exception:
+                PsycopgIntegrityError = None
+            if PsycopgIntegrityError is not None and isinstance(error, PsycopgIntegrityError):
+                raise sqlite3.IntegrityError("violação de integridade relacional") from error
+            raise
+        return PostgresqlCursorCompat(cursor=cursor, lastrowid=self._resolveLastRowId(query=query))
 
 
 @dataclass(frozen=True)
@@ -121,7 +217,7 @@ def _createPostgresqlConnection(databaseUrl: str) -> DbConnectionProtocol:
 
     connection = psycopg.connect(databaseUrl, row_factory=dict_row)
     connection.autocommit = False
-    return connection
+    return PostgresqlConnectionCompat(rawConnection=connection)
 
 
 def createDatabaseConnection(

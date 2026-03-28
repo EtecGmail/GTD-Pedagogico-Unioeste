@@ -417,3 +417,30 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Introduzir camada mínima de abstração de query paramstyle/dialeto para permitir execução dos serviços existentes em PostgreSQL sem refatoração massiva.
 - Validar migração end-to-end em ambiente de staging com PostgreSQL real (incluindo sessão, auth, RF-01 a RF-10) e ampliar testes de integração por dialeto.
 - Documentar runbook operacional de migrações (`up`, rollback controlado, e validação pós-deploy) para uso em produção.
+
+- **28/03/2026 (compatibilidade real do domínio com PostgreSQL - ciclo incremental seguro)** – Auditoria de compatibilidade concluída com foco em dependências críticas de SQLite no domínio (paramstyle `?`, uso de `PRAGMA table_info`, acoplamento a `sqlite3.IntegrityError` e dependência implícita de `lastrowid`). A solução mínima foi implementada na camada de persistência para preservar arquitetura e reduzir risco de regressão: `PostgresqlConnectionCompat` agora adapta placeholders para `%s`, traduz erro de integridade do driver PostgreSQL para fluxo já tratado no domínio e mantém resolução de `lastrowid` para inserts compatíveis. Também foi introduzido `hasTableColumn` com fallback por dialeto (`PRAGMA` em SQLite e `information_schema.columns` em PostgreSQL), aplicado nos serviços que faziam migração leve de coluna (`AuthService`, `RF02Service`, `RF03Service`, `RF04Service`). Foram adicionados testes de compatibilidade cobrindo adaptação de paramstyle/`lastrowid` e checagem de coluna em PostgreSQL. Fluxos críticos de auth/sessão/reset, RF-02/RF-06, RF-03/RF-08, RF-04/RF-05/RF-10 e RF-09 permaneceram verdes na suíte completa.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `src/gtd_backend/auth.py`
+- `src/gtd_backend/rf02.py`
+- `src/gtd_backend/rf03.py`
+- `src/gtd_backend/rf04.py`
+- `tests/test_persistence.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_persistence.py tests/test_auth.py tests/test_rf02.py tests/test_rf03.py tests/test_rf04.py tests/test_auth_http.py` (sucesso).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- A compatibilidade de `lastrowid` em PostgreSQL depende de convenção de PK sequencial em coluna `id`; se futuros agregados adotarem outra estratégia de chave, o helper deve evoluir para `RETURNING` explícito por query.
+- A camada de compatibilidade reduz acoplamento, mas ainda há tipagem estática em alguns serviços apontando `sqlite3.Connection`; convém evoluir para protocolo de conexão em etapa dedicada, sem impacto funcional.
+- Não houve execução E2E contra instância PostgreSQL real neste ciclo; a cobertura atual valida bootstrap/queries por caminho de compatibilidade e stubs.
+
+### Próximos passos
+- Adicionar cenário de integração opcional com PostgreSQL real (ex.: container efêmero em CI) para validar caminho fim a fim em ambiente próximo de staging.
+- Evoluir gradualmente queries de insert para `RETURNING id` explícito nos pontos de maior criticidade, reduzindo dependência do fallback de sequência.
+- Continuar rollout incremental de hardenings operacionais (staging, secret manager e observabilidade), sem alterar contratos de domínio já estabilizados.

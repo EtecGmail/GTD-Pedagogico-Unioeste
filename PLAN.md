@@ -151,3 +151,12 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 - Introduzir factory única de conexão (`createDatabaseConnection`) com dialetos suportados `sqlite` e `postgresql`, preservando contrato de injeção de conexão já utilizado pelos serviços de domínio.
 - Formalizar migrações versionadas por dialeto em `src/gtd_backend/db/migrations/{sqlite,postgresql}` com runner idempotente (`applyMigrations`) e tabela de controle `schema_migrations`.
 - `createApp` passa a aplicar migrações no bootstrap antes de inicializar serviços, mantendo compatibilidade incremental com SQLite e preparando operação com PostgreSQL sem reescrita do domínio.
+
+## Decisão estrutural relevante (28/03/2026 - compatibilidade SQL incremental no domínio)
+
+- Introduzir uma camada mínima de compatibilidade para execução real em PostgreSQL **sem reescrever os serviços de domínio**:
+  - wrapper de conexão PostgreSQL para adaptar paramstyle (`?` -> `%s`) de forma transparente;
+  - tradução de erro de integridade do driver PostgreSQL para exceção de domínio já tratada pelos serviços;
+  - resolução incremental de `lastrowid` para inserts com PK `id` autoincremental, preservando contratos atuais dos serviços.
+- Substituir verificações de coluna baseadas em `PRAGMA table_info` por helper de dialeto (`hasTableColumn`), usando `information_schema.columns` no PostgreSQL.
+- Manter SQLite como padrão em testes/dev e usar PostgreSQL em staging/produção com baixo acoplamento ao dialeto.

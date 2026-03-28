@@ -2,6 +2,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from gtd_backend.persistence import hasTableColumn
+
 
 VALID_INBOX_STATUSES = {"inbox", "next_action", "waiting"}
 
@@ -29,9 +31,7 @@ class RF02Service:
             )
             """
         )
-        columns = self.connection.execute("PRAGMA table_info(inbox_items)").fetchall()
-        existingColumns = {str(column["name"]) for column in columns}
-        if "user_id" not in existingColumns:
+        if not hasTableColumn(connection=self.connection, tableName="inbox_items", columnName="user_id"):
             self.connection.execute("ALTER TABLE inbox_items ADD COLUMN user_id INTEGER")
         self.connection.commit()
 

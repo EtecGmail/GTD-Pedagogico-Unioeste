@@ -3,6 +3,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from gtd_backend.persistence import hasTableColumn
+
 
 class RF03Service:
     def __init__(
@@ -30,9 +32,7 @@ class RF03Service:
             )
             """
         )
-        columns = self.connection.execute("PRAGMA table_info(reading_plans)").fetchall()
-        existingColumns = {str(column["name"]) for column in columns}
-        if "user_id" not in existingColumns:
+        if not hasTableColumn(connection=self.connection, tableName="reading_plans", columnName="user_id"):
             self.connection.execute("ALTER TABLE reading_plans ADD COLUMN user_id INTEGER")
         self.connection.commit()
 
