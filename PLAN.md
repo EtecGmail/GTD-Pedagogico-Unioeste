@@ -142,3 +142,12 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
   - em `development/test`, fallback controlado para chave local continua disponível apenas para evitar quebra do fluxo local.
 - Introduzir versionamento explícito de chave nos metadados persistidos de certificado (`metadata.keyVersion`) para novas gravações, mantendo `storageVersion` e `encryptedAtRest`.
 - Implementar keyring mínimo incremental (chave ativa para escrita + legadas para leitura), com compatibilidade retroativa para registros legados sem `keyVersion` e sem migração destrutiva em massa.
+
+## Decisão estrutural relevante (28/03/2026 - persistência produção PostgreSQL + migrações formais)
+
+- Evoluir o bootstrap de persistência para resolver banco por ambiente de forma explícita:
+  - `development/test`: fallback seguro para `sqlite:///:memory:` quando `DATABASE_URL` não informado;
+  - `production`: `DATABASE_URL` obrigatório e validado com erro seguro (`PersistenceConfigurationError`).
+- Introduzir factory única de conexão (`createDatabaseConnection`) com dialetos suportados `sqlite` e `postgresql`, preservando contrato de injeção de conexão já utilizado pelos serviços de domínio.
+- Formalizar migrações versionadas por dialeto em `src/gtd_backend/db/migrations/{sqlite,postgresql}` com runner idempotente (`applyMigrations`) e tabela de controle `schema_migrations`.
+- `createApp` passa a aplicar migrações no bootstrap antes de inicializar serviços, mantendo compatibilidade incremental com SQLite e preparando operação com PostgreSQL sem reescrita do domínio.

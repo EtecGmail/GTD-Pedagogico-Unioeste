@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gtd_backend.auth import ALLOWED_USER_ROLES, AuthService
-from gtd_backend.persistence import DEFAULT_DATABASE_URL, createSqliteConnection
+from gtd_backend.persistence import DEFAULT_DATABASE_URL, applyMigrations, createDatabaseConnection
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
@@ -501,7 +501,8 @@ def createApp(
 ) -> FastAPI:
     app = FastAPI(title="GTD Pedagógico Unioeste")
     app.state.databaseUrl = databaseUrl
-    app.state.dbConnection = createSqliteConnection(databaseUrl=databaseUrl)
+    app.state.dbConnection = createDatabaseConnection(databaseUrl=databaseUrl, environmentName=environmentName)
+    applyMigrations(connection=app.state.dbConnection, databaseUrl=databaseUrl)
     app.state.authService = AuthService(connection=app.state.dbConnection)
     app.state.rf01Service = RF01Service(connection=app.state.dbConnection)
     app.state.rf02Service = RF02Service(connection=app.state.dbConnection)
