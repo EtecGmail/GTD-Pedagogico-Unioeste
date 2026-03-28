@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import os
 import re
 import sqlite3
@@ -46,45 +47,128 @@ class ContentCipher:
     def encrypt(self, plainContent: bytes) -> bytes:
         raise NotImplementedError
 
-    def decrypt(self, cipherContent: bytes) -> bytes:
+    def decrypt(self, cipherContent: bytes, keyVersion: int | None = None) -> bytes:
+        raise NotImplementedError
+
+    def getActiveKeyVersion(self) -> int:
         raise NotImplementedError
 
 
+class EncryptionConfigurationError(ValueError):
+    pass
+
+
 class HmacXorContentCipher(ContentCipher):
-    def __init__(self, encryptionKey: bytes | None = None) -> None:
-        configuredKey = encryptionKey or os.environ.get("CERTIFICATE_STORAGE_KEY", "").encode("utf-8")
-        if configuredKey:
-            self.encryptionKey = hashlib.sha256(configuredKey).digest()
-        else:
-            self.encryptionKey = hashlib.sha256(b"gtd-pedagogico-unioeste-dev-key").digest()
+    def __init__(
+        self,
+        encryptionKey: bytes | None = None,
+        activeKeyVersion: int = 1,
+        keyring: dict[int, bytes] | None = None,
+    ) -> None:
+        if keyring is None:
+            defaultKey = encryptionKey or os.environ.get("CERTIFICATE_STORAGE_KEY", "").encode("utf-8")
+            if not defaultKey:
+                defaultKey = b"gtd-pedagogico-unioeste-dev-key"
+            keyring = {activeKeyVersion: defaultKey}
+        if activeKeyVersion not in keyring:
+            raise EncryptionConfigurationError("versão de chave ativa inválida")
+
+        self.activeKeyVersion = activeKeyVersion
+        self.keyring = {version: hashlib.sha256(value).digest() for version, value in keyring.items()}
 
     def encrypt(self, plainContent: bytes) -> bytes:
         nonce = os.urandom(16)
-        stream = self._buildStream(len(plainContent), nonce)
+        encryptionKey = self._resolveKeyByVersion(self.activeKeyVersion)
+        stream = self._buildStream(len(plainContent), nonce, encryptionKey)
         encryptedBody = bytes([plainByte ^ streamByte for plainByte, streamByte in zip(plainContent, stream)])
-        signature = hmac.new(self.encryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
+        signature = hmac.new(encryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
         return b"GTD1" + nonce + signature + encryptedBody
 
-    def decrypt(self, cipherContent: bytes) -> bytes:
+    def decrypt(self, cipherContent: bytes, keyVersion: int | None = None) -> bytes:
         if len(cipherContent) < 52 or not cipherContent.startswith(b"GTD1"):
             raise ValueError("payload criptografado inválido")
         nonce = cipherContent[4:20]
         expectedSignature = cipherContent[20:52]
         encryptedBody = cipherContent[52:]
-        computedSignature = hmac.new(self.encryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
-        if not hmac.compare_digest(expectedSignature, computedSignature):
-            raise ValueError("assinatura criptográfica inválida")
-        stream = self._buildStream(len(encryptedBody), nonce)
-        return bytes([encryptedByte ^ streamByte for encryptedByte, streamByte in zip(encryptedBody, stream)])
 
-    def _buildStream(self, size: int, nonce: bytes) -> bytes:
+        if keyVersion is None:
+            versionsToTry = [self.activeKeyVersion] + [
+                version for version in self.keyring if version != self.activeKeyVersion
+            ]
+        else:
+            versionsToTry = [keyVersion]
+
+        for version in versionsToTry:
+            if version not in self.keyring:
+                continue
+            decryptionKey = self._resolveKeyByVersion(version)
+            computedSignature = hmac.new(decryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
+            if not hmac.compare_digest(expectedSignature, computedSignature):
+                continue
+            stream = self._buildStream(len(encryptedBody), nonce, decryptionKey)
+            return bytes([encryptedByte ^ streamByte for encryptedByte, streamByte in zip(encryptedBody, stream)])
+
+        if keyVersion is not None and keyVersion not in self.keyring:
+            raise ValueError("versão de chave desconhecida")
+        raise ValueError("assinatura criptográfica inválida")
+
+    def getActiveKeyVersion(self) -> int:
+        return self.activeKeyVersion
+
+    def _resolveKeyByVersion(self, keyVersion: int) -> bytes:
+        key = self.keyring.get(keyVersion)
+        if key is None:
+            raise ValueError("versão de chave desconhecida")
+        return key
+
+    def _buildStream(self, size: int, nonce: bytes, encryptionKey: bytes) -> bytes:
         output = bytearray()
         counter = 0
         while len(output) < size:
-            block = hashlib.sha256(self.encryptionKey + nonce + counter.to_bytes(8, "big")).digest()
+            block = hashlib.sha256(encryptionKey + nonce + counter.to_bytes(8, "big")).digest()
             output.extend(block)
             counter += 1
         return bytes(output[:size])
+
+
+def buildCertificateCipherFromEnvironment(environmentName: str | None = None) -> HmacXorContentCipher:
+    normalizedEnvironment = (environmentName or os.environ.get("APP_ENV", "development")).strip().lower()
+    isProduction = normalizedEnvironment in {"prod", "production"}
+    activeVersionRaw = os.environ.get("CERTIFICATE_KEY_ACTIVE_VERSION", "").strip()
+
+    if not activeVersionRaw:
+        if isProduction:
+            raise EncryptionConfigurationError("chave de criptografia do cofre não configurada")
+        return HmacXorContentCipher()
+
+    if not activeVersionRaw.isdigit() or int(activeVersionRaw) <= 0:
+        raise EncryptionConfigurationError("versão de chave ativa inválida")
+
+    activeKeyVersion = int(activeVersionRaw)
+    keyring: dict[int, bytes] = {}
+
+    activeKeyValue = os.environ.get(f"CERTIFICATE_KEY_{activeKeyVersion}", "").strip()
+    if not activeKeyValue:
+        raise EncryptionConfigurationError("versão de chave ativa inválida")
+    keyring[activeKeyVersion] = activeKeyValue.encode("utf-8")
+
+    legacyVersionsRaw = os.environ.get("CERTIFICATE_KEY_LEGACY_VERSIONS", "").strip()
+    if legacyVersionsRaw:
+        for rawValue in legacyVersionsRaw.split(","):
+            normalizedValue = rawValue.strip()
+            if not normalizedValue:
+                continue
+            if not normalizedValue.isdigit() or int(normalizedValue) <= 0:
+                raise EncryptionConfigurationError("versão legada inválida")
+            legacyVersion = int(normalizedValue)
+            if legacyVersion == activeKeyVersion:
+                continue
+            legacyKeyValue = os.environ.get(f"CERTIFICATE_KEY_{legacyVersion}", "").strip()
+            if not legacyKeyValue:
+                raise EncryptionConfigurationError("configuração de chave legada incompleta")
+            keyring[legacyVersion] = legacyKeyValue.encode("utf-8")
+
+    return HmacXorContentCipher(activeKeyVersion=activeKeyVersion, keyring=keyring)
 
 
 def _sanitizeOriginalName(originalName: str) -> str:
@@ -165,7 +249,12 @@ class RF04Service:
         fileIdentifier = uuid.uuid4().hex
         storageKey = self._buildUniqueStorageKey(content=content, contentType=contentType)
         createdAt = self.nowProvider().isoformat()
-        metadata = '{"storageVersion":2,"encryptedAtRest":true}'
+        metadataDict = {
+            "storageVersion": 2,
+            "encryptedAtRest": True,
+            "keyVersion": self.contentCipher.getActiveKeyVersion(),
+        }
+        metadata = json.dumps(metadataDict, separators=(",", ":"))
 
         cursor = self.connection.execute(
             """
@@ -207,21 +296,25 @@ class RF04Service:
 
         if userId is None:
             row = self.connection.execute(
-                "SELECT storage_key FROM acc_certificates WHERE id = ?",
+                "SELECT storage_key, metadata FROM acc_certificates WHERE id = ?",
                 (certificateId,),
             ).fetchone()
         else:
             row = self.connection.execute(
-                "SELECT storage_key FROM acc_certificates WHERE id = ? AND user_id = ?",
+                "SELECT storage_key, metadata FROM acc_certificates WHERE id = ? AND user_id = ?",
                 (certificateId, userId),
             ).fetchone()
         if row is None:
             raise LookupError("certificado não encontrado")
         storageKey = str(row["storage_key"])
+        metadata = self._parseMetadata(str(row["metadata"]))
+        keyVersion = metadata.get("keyVersion")
+        if not isinstance(keyVersion, int):
+            keyVersion = None
 
         try:
             encryptedContent = self.storage.load(storageKey=storageKey)
-            return self.contentCipher.decrypt(encryptedContent)
+            return self.contentCipher.decrypt(encryptedContent, keyVersion=keyVersion)
         except LookupError:
             raise
         except Exception as error:
@@ -254,6 +347,7 @@ class RF04Service:
                     size_bytes,
                     hours,
                     storage_key,
+                    metadata,
                     created_at
                 FROM acc_certificates
                 ORDER BY created_at DESC, id DESC
@@ -272,6 +366,7 @@ class RF04Service:
                     size_bytes,
                     hours,
                     storage_key,
+                    metadata,
                     created_at
                 FROM acc_certificates
                 WHERE user_id = ?
@@ -289,11 +384,26 @@ class RF04Service:
                 "sizeBytes": int(row["size_bytes"]),
                 "hours": int(row["hours"]) if row["hours"] is not None else None,
                 "storageKey": str(row["storage_key"]),
-                "metadata": {"storageVersion": 2, "encryptedAtRest": True},
+                "metadata": self._parseMetadata(str(row["metadata"])),
                 "createdAt": str(row["created_at"]),
             }
             for row in rows
         ]
+
+    def _parseMetadata(self, metadataValue: str) -> dict[str, int | bool]:
+        try:
+            loadedMetadata = json.loads(metadataValue)
+        except Exception:
+            return {"storageVersion": 2, "encryptedAtRest": True}
+        if not isinstance(loadedMetadata, dict):
+            return {"storageVersion": 2, "encryptedAtRest": True}
+        normalizedMetadata: dict[str, int | bool] = {
+            "storageVersion": int(loadedMetadata.get("storageVersion", 2)),
+            "encryptedAtRest": bool(loadedMetadata.get("encryptedAtRest", True)),
+        }
+        if "keyVersion" in loadedMetadata and isinstance(loadedMetadata["keyVersion"], int):
+            normalizedMetadata["keyVersion"] = int(loadedMetadata["keyVersion"])
+        return normalizedMetadata
 
     def _detectContentType(self, content: bytes) -> str | None:
         if content.startswith(b"%PDF-"):

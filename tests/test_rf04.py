@@ -1,10 +1,17 @@
+import os
 from base64 import b64encode
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
 from gtd_backend.http import createApp
-from gtd_backend.rf04 import InMemoryCertificateStorage, RF04Service
+from gtd_backend.rf04 import (
+    EncryptionConfigurationError,
+    HmacXorContentCipher,
+    InMemoryCertificateStorage,
+    RF04Service,
+    buildCertificateCipherFromEnvironment,
+)
 
 
 def _toBase64(content: bytes) -> str:
@@ -182,6 +189,117 @@ def test_rf04_service_deve_armazenar_conteudo_criptografado_em_repouso_e_recuper
     assert restored == content
 
 
+def test_rf04_service_deve_persistir_key_version_em_metadados_e_aceitar_keyring_ativo() -> None:
+    storage = InMemoryCertificateStorage()
+    cipher = HmacXorContentCipher(
+        activeKeyVersion=2,
+        keyring={2: b"chave-ativa-segura", 1: b"chave-legada-antiga"},
+    )
+    service = RF04Service(storage=storage, contentCipher=cipher)
+
+    certificateId = service.uploadCertificate(
+        originalName="versionado.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 versao",
+        userId=1,
+    )
+
+    certificate = service.listCertificates(userId=1)[0]
+    assert certificateId > 0
+    assert certificate["metadata"]["storageVersion"] == 2
+    assert certificate["metadata"]["keyVersion"] == 2
+
+
+def test_rf04_service_deve_suportar_leitura_com_chave_legada_apos_rotacao() -> None:
+    storage = InMemoryCertificateStorage()
+    cipherV1 = HmacXorContentCipher(activeKeyVersion=1, keyring={1: b"k1-chave-legada"})
+    serviceV1 = RF04Service(storage=storage, contentCipher=cipherV1)
+    certIdV1 = serviceV1.uploadCertificate(
+        originalName="antigo.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 legado",
+        userId=1,
+    )
+
+    cipherV2 = HmacXorContentCipher(
+        activeKeyVersion=2,
+        keyring={2: b"k2-chave-ativa", 1: b"k1-chave-legada"},
+    )
+    serviceV2 = RF04Service(storage=storage, contentCipher=cipherV2, connection=serviceV1.connection)
+    certIdV2 = serviceV2.uploadCertificate(
+        originalName="novo.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 novo",
+        userId=1,
+    )
+
+    restoredV1 = serviceV2.getCertificateContent(certificateId=certIdV1, userId=1)
+    restoredV2 = serviceV2.getCertificateContent(certificateId=certIdV2, userId=1)
+    assert restoredV1 == b"%PDF-1.7 legado"
+    assert restoredV2 == b"%PDF-1.7 novo"
+
+
+def test_rf04_service_deve_manter_compatibilidade_com_metadado_legado_sem_key_version() -> None:
+    storage = InMemoryCertificateStorage()
+    legacyCipher = HmacXorContentCipher(activeKeyVersion=1, keyring={1: b"chave-legada"})
+    service = RF04Service(storage=storage, contentCipher=legacyCipher)
+    certificateId = service.uploadCertificate(
+        originalName="legacy.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 conteudo legado",
+        userId=8,
+    )
+    service.connection.execute(
+        "UPDATE acc_certificates SET metadata = ? WHERE id = ?",
+        ('{"storageVersion":2,"encryptedAtRest":true}', certificateId),
+    )
+    service.connection.commit()
+
+    rotatedCipher = HmacXorContentCipher(
+        activeKeyVersion=2,
+        keyring={2: b"chave-nova", 1: b"chave-legada"},
+    )
+    rotatedService = RF04Service(storage=storage, contentCipher=rotatedCipher, connection=service.connection)
+    restored = rotatedService.getCertificateContent(certificateId=certificateId, userId=8)
+    assert restored == b"%PDF-1.7 conteudo legado"
+
+
+def test_rf04_config_deve_falhar_sem_chave_em_producao_sem_vazamento() -> None:
+    oldEnv = os.environ.copy()
+    try:
+        os.environ.pop("CERTIFICATE_KEY_ACTIVE_VERSION", None)
+        os.environ.pop("CERTIFICATE_KEY_1", None)
+        os.environ.pop("CERTIFICATE_KEY_LEGACY_VERSIONS", None)
+        try:
+            buildCertificateCipherFromEnvironment(environmentName="production")
+            assert False, "esperava falha por ausência de chave em produção"
+        except EncryptionConfigurationError as error:
+            message = str(error)
+            assert "chave de criptografia" in message
+            assert "CERTIFICATE_KEY_" not in message
+    finally:
+        os.environ.clear()
+        os.environ.update(oldEnv)
+
+
+def test_rf04_config_deve_falhar_com_key_version_desconhecida_sem_expor_material_sensivel() -> None:
+    oldEnv = os.environ.copy()
+    try:
+        os.environ["CERTIFICATE_KEY_ACTIVE_VERSION"] = "2"
+        os.environ["CERTIFICATE_KEY_1"] = "apenas-legada"
+        os.environ["CERTIFICATE_KEY_LEGACY_VERSIONS"] = "1"
+        try:
+            buildCertificateCipherFromEnvironment(environmentName="production")
+            assert False, "esperava falha por chave ativa incompatível"
+        except EncryptionConfigurationError as error:
+            message = str(error)
+            assert "versão de chave ativa inválida" in message
+            assert "apenas-legada" not in message
+    finally:
+        os.environ.clear()
+        os.environ.update(oldEnv)
+
+
 def test_rf04_service_deve_tratar_falha_de_decrypt_e_lookup_com_segurança() -> None:
     storage = InMemoryCertificateStorage()
     service = RF04Service(storage=storage)
@@ -203,6 +321,29 @@ def test_rf04_service_deve_tratar_falha_de_decrypt_e_lookup_com_segurança() -> 
     try:
         service.getCertificateContent(certificateId=certificateId, userId=1)
         assert False, "esperava ValueError para falha de decrypt"
+    except ValueError as error:
+        assert str(error) == "falha ao recuperar certificado"
+
+
+def test_rf04_service_deve_falhar_com_seguranca_para_key_version_desconhecida() -> None:
+    storage = InMemoryCertificateStorage()
+    cipher = HmacXorContentCipher(activeKeyVersion=1, keyring={1: b"chave-v1"})
+    service = RF04Service(storage=storage, contentCipher=cipher)
+    certificateId = service.uploadCertificate(
+        originalName="desconhecida.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 payload",
+        userId=1,
+    )
+    service.connection.execute(
+        "UPDATE acc_certificates SET metadata = ? WHERE id = ?",
+        ('{"storageVersion":2,"encryptedAtRest":true,"keyVersion":99}', certificateId),
+    )
+    service.connection.commit()
+
+    try:
+        service.getCertificateContent(certificateId=certificateId, userId=1)
+        assert False, "esperava falha para keyVersion desconhecida"
     except ValueError as error:
         assert str(error) == "falha ao recuperar certificado"
 

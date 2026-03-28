@@ -258,6 +258,31 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - `poetry run pytest -q tests/test_auth.py` (sucesso após implementação: `8 passed`).
 - `poetry run pytest -q` (falha inicial de regressão em `tests/test_persistence.py` devido à nova exceção de domínio; sucesso após ajuste de compatibilidade no teste).
 - `poetry run pytest -q tests/test_auth.py tests/test_persistence.py` (sucesso: `9 passed`).
+
+- **28/03/2026 (hardening cofre fase 3 / chave externa e rotação segura)** – Evolução incremental via TDD estrito da criptografia do RF-04 com foco operacional (gestão de chave por ambiente e base de rotação), preservando contrato do `CertificateStorage`. Primeiro foram adicionados testes de regressão/aceitação cobrindo: persistência explícita de `keyVersion` em metadata, keyring com chave ativa + legadas, leitura de conteúdo legado sem `keyVersion`, falha segura para versão desconhecida e falhas de configuração em produção sem vazamento de segredo. Em seguida, a implementação do `ContentCipher` foi evoluída para suportar keyring versionado com resolução explícita de versão na descriptografia e fallback controlado apenas para legado sem metadado de versão. O bootstrap (`createApp`) foi desacoplado da lógica criptográfica ao passar a resolver a cifra por ambiente via `buildCertificateCipherFromEnvironment(...)`, permitindo futura troca por secret manager sem refatoração ampla do domínio.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/rf04.py`
+- `src/gtd_backend/http.py`
+- `tests/test_rf04.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_rf04.py` (sucesso).
+- `poetry run pytest -q tests/test_rf05.py tests/test_rf08.py tests/test_rf10.py tests/test_auth_http.py` (sucesso).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- O keyring está externalizado por variáveis de ambiente, porém ainda sem integração direta com um secret manager; rotação operacional automática (orquestrada) permanece como próxima etapa.
+- A criptografia atual (HMAC + XOR stream derivado) mantém compatibilidade com o contrato existente, mas no médio prazo recomenda-se evolução para primitive AEAD padrão da indústria com rollout controlado e sem quebra de leitura.
+- O endpoint de upload segue em JSON (`contentBase64`) por limitação prévia de ambiente; permanece recomendada migração futura para `multipart/form-data`.
+
+### Próximos passos
+- Integrar a resolução de chave com provedor de segredo por ambiente (ex.: injeção por runtime/secret manager) sem alterar o contrato do RF-04.
+- Planejar runbook de rotação operacional (ativar nova chave, manter legadas por janela definida, recriptografar sob demanda em leituras/escritas futuras).
+- Adicionar observabilidade operacional de configuração criptográfica (health checks sem exposição de segredo).
 - `poetry run pytest -q` (sucesso: suíte completa aprovada).
 
 ### Problemas/riscos remanescentes
