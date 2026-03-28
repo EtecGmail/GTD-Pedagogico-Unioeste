@@ -8,6 +8,8 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from gtd_backend.persistence import hasTableColumn
+
 MAX_CERTIFICATE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {
     "application/pdf": "pdf",
@@ -216,9 +218,7 @@ class RF04Service:
             )
             """
         )
-        columns = self.connection.execute("PRAGMA table_info(acc_certificates)").fetchall()
-        existingColumns = {str(column["name"]) for column in columns}
-        if "user_id" not in existingColumns:
+        if not hasTableColumn(connection=self.connection, tableName="acc_certificates", columnName="user_id"):
             self.connection.execute("ALTER TABLE acc_certificates ADD COLUMN user_id INTEGER")
         self.connection.commit()
 

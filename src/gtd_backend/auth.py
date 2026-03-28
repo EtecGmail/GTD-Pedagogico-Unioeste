@@ -3,6 +3,7 @@ import sqlite3
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
+from gtd_backend.persistence import hasTableColumn
 
 CREDENCIAIS_INVALIDAS = "credenciais inválidas"
 EMAIL_JA_CADASTRADO = "e-mail já cadastrado"
@@ -46,9 +47,7 @@ class AuthService:
             )
             """
         )
-        columns = self.connection.execute("PRAGMA table_info(users)").fetchall()
-        existingColumns = {str(column["name"]) for column in columns}
-        if "role" not in existingColumns:
+        if not hasTableColumn(connection=self.connection, tableName="users", columnName="role"):
             self.connection.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'aluno'")
         self.connection.commit()
 
