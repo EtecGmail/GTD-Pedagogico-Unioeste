@@ -1,4 +1,5 @@
 import logging
+import hashlib
 
 from fastapi.testclient import TestClient
 
@@ -184,7 +185,14 @@ def test_get_current_user_deve_rejeitar_role_ausente_ou_invalido_na_sessao() -> 
         json={"email": "admin@unioeste.br", "password": "SenhaForte123"},
     ).json()["accessToken"]
 
-    app.state.sessionStore._tokenToUser["token-invalido"] = {"userId": 1, "role": "gestor"}  # type: ignore[attr-defined]
+    app.state.dbConnection.execute(
+        """
+        INSERT INTO auth_sessions (token_hash, user_id, role, created_at, expires_at, revoked_at)
+        VALUES (?, ?, ?, ?, ?, NULL)
+        """,
+        (hashlib.sha256("token-invalido".encode("utf-8")).hexdigest(), 1, "gestor", 1.0, 9999999999.0),
+    )
+    app.state.dbConnection.commit()
     respostaRoleInvalido = client.get(
         "/rf02/inbox-items",
         headers={"Authorization": "Bearer token-invalido"},
@@ -192,7 +200,11 @@ def test_get_current_user_deve_rejeitar_role_ausente_ou_invalido_na_sessao() -> 
     assert respostaRoleInvalido.status_code == 401
     assert respostaRoleInvalido.json() == {"detail": "não autenticado"}
 
-    app.state.sessionStore._tokenToUser[token] = {"userId": 1, "role": ""}  # type: ignore[attr-defined]
+    app.state.dbConnection.execute(
+        "UPDATE auth_sessions SET role = ? WHERE token_hash = ?",
+        ("", hashlib.sha256(token.encode("utf-8")).hexdigest()),
+    )
+    app.state.dbConnection.commit()
     respostaRoleAusente = client.get(
         "/rf02/inbox-items",
         headers={"Authorization": f"Bearer {token}"},
@@ -200,6 +212,117 @@ def test_get_current_user_deve_rejeitar_role_ausente_ou_invalido_na_sessao() -> 
     assert respostaRoleAusente.status_code == 401
     assert respostaRoleAusente.json() == {"detail": "não autenticado"}
 
+
+
+
+def test_sessao_deve_ser_compartilhada_entre_instancias_com_provider_persistente(tmp_path) -> None:
+    databasePath = tmp_path / "auth_sessions_shared.db"
+    databaseUrl = f"sqlite:///{databasePath}"
+
+    appA = createApp(databaseUrl=databaseUrl)
+    appB = createApp(databaseUrl=databaseUrl)
+    clientA = TestClient(appA)
+    clientB = TestClient(appB)
+
+    appA.state.authService.register_user("multi@unioeste.br", "SenhaForte123", role="aluno")
+
+    token = clientA.post(
+        "/auth/login",
+        json={"email": "multi@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    respostaEmOutraInstancia = clientB.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respostaEmOutraInstancia.status_code == 200
+
+
+def test_sessao_expirada_deve_ser_rejeitada() -> None:
+    tempoAtual = {"valor": 1000.0}
+
+    def nowProvider() -> float:
+        return tempoAtual["valor"]
+
+    app = createApp(nowProvider=nowProvider, sessionTtlSeconds=10)
+    client = TestClient(app)
+    app.state.authService.register_user("ttl@unioeste.br", "SenhaForte123")
+
+    token = client.post(
+        "/auth/login",
+        json={"email": "ttl@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    tempoAtual["valor"] = 1011.0
+
+    resposta = client.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resposta.status_code == 401
+    assert resposta.json() == {"detail": "não autenticado"}
+
+
+def test_logout_deve_revogar_sessao_explicitamente() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("logout@unioeste.br", "SenhaForte123")
+
+    token = client.post(
+        "/auth/login",
+        json={"email": "logout@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    respostaLogout = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert respostaLogout.status_code == 200
+    assert respostaLogout.json() == {"success": True, "message": "logout realizado com sucesso"}
+
+    respostaPosLogout = client.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respostaPosLogout.status_code == 401
+    assert respostaPosLogout.json() == {"detail": "não autenticado"}
+
+
+def test_multiplas_sessoes_mesmo_usuario_devem_ser_independentes() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("duplo@unioeste.br", "SenhaForte123")
+
+    tokenA = client.post(
+        "/auth/login",
+        json={"email": "duplo@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    tokenB = client.post(
+        "/auth/login",
+        json={"email": "duplo@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    assert tokenA != tokenB
+
+    respostaLogoutA = client.post("/auth/logout", headers={"Authorization": f"Bearer {tokenA}"})
+    assert respostaLogoutA.status_code == 200
+
+    respostaTokenA = client.get("/rf02/inbox-items", headers={"Authorization": f"Bearer {tokenA}"})
+    respostaTokenB = client.get("/rf02/inbox-items", headers={"Authorization": f"Bearer {tokenB}"})
+
+    assert respostaTokenA.status_code == 401
+    assert respostaTokenB.status_code == 200
+
+
+def test_logs_de_autorizacao_nao_devem_vazar_token_bruto(caplog) -> None:
+    app = createApp()
+    client = TestClient(app)
+
+    caplog.set_level(logging.INFO)
+    tokenInvalido = "x" * 24
+
+    resposta = client.get("/rf02/inbox-items", headers={"Authorization": f"Bearer {tokenInvalido}"})
+    assert resposta.status_code == 401
+
+    mensagens = " ".join(registro.getMessage() for registro in caplog.records)
+    assert tokenInvalido not in mensagens
 
 def test_login_http_deve_validar_entradas_invalidas() -> None:
     app = createApp()

@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import secrets
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -347,10 +348,13 @@ class MemoryRateLimiter(RateLimiter):
 
 
 class SessionStore:
-    def createSession(self, userId: int, role: str) -> str:
+    def createSession(self, userId: int, role: str, now: float | None = None) -> str:
         raise NotImplementedError
 
-    def resolveSession(self, accessToken: str) -> dict[str, int | str] | None:
+    def resolveSession(self, accessToken: str, now: float | None = None) -> dict[str, int | str] | None:
+        raise NotImplementedError
+
+    def revokeSession(self, accessToken: str, now: float | None = None) -> bool:
         raise NotImplementedError
 
 
@@ -358,7 +362,7 @@ class InMemorySessionStore(SessionStore):
     def __init__(self) -> None:
         self._tokenToUser: dict[str, dict[str, int | str]] = {}
 
-    def createSession(self, userId: int, role: str) -> str:
+    def createSession(self, userId: int, role: str, now: float | None = None) -> str:
         if userId <= 0:
             raise ValueError("usuário inválido")
         normalizedRole = role.strip().lower()
@@ -368,8 +372,99 @@ class InMemorySessionStore(SessionStore):
         self._tokenToUser[accessToken] = {"userId": userId, "role": normalizedRole}
         return accessToken
 
-    def resolveSession(self, accessToken: str) -> dict[str, int | str] | None:
+    def resolveSession(self, accessToken: str, now: float | None = None) -> dict[str, int | str] | None:
         return self._tokenToUser.get(accessToken)
+
+    def revokeSession(self, accessToken: str, now: float | None = None) -> bool:
+        return self._tokenToUser.pop(accessToken, None) is not None
+
+
+class SqliteSessionStore(SessionStore):
+    def __init__(self, connection: sqlite3.Connection, sessionTtlSeconds: int = 12 * 60 * 60) -> None:
+        if sessionTtlSeconds <= 0:
+            raise ValueError("ttl da sessão deve ser positivo")
+        self.connection = connection
+        self.sessionTtlSeconds = sessionTtlSeconds
+        self._createTableIfNotExists()
+
+    def _createTableIfNotExists(self) -> None:
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                revoked_at REAL
+            )
+            """
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)"
+        )
+        self.connection.commit()
+
+    def _hashToken(self, accessToken: str) -> str:
+        return hashlib.sha256(accessToken.encode("utf-8")).hexdigest()
+
+    def createSession(self, userId: int, role: str, now: float | None = None) -> str:
+        if userId <= 0:
+            raise ValueError("usuário inválido")
+        normalizedRole = role.strip().lower()
+        if normalizedRole not in ALLOWED_USER_ROLES:
+            raise ValueError("papel de sessão inválido")
+        nowValue = now if now is not None else time.time()
+        accessToken = secrets.token_urlsafe(32)
+        self.connection.execute(
+            """
+            INSERT INTO auth_sessions (token_hash, user_id, role, created_at, expires_at, revoked_at)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                self._hashToken(accessToken),
+                userId,
+                normalizedRole,
+                nowValue,
+                nowValue + float(self.sessionTtlSeconds),
+            ),
+        )
+        self.connection.commit()
+        return accessToken
+
+    def resolveSession(self, accessToken: str, now: float | None = None) -> dict[str, int | str] | None:
+        nowValue = now if now is not None else time.time()
+        row = self.connection.execute(
+            """
+            SELECT user_id, role, expires_at, revoked_at
+            FROM auth_sessions
+            WHERE token_hash = ?
+            """,
+            (self._hashToken(accessToken),),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["revoked_at"] is not None:
+            return None
+        if float(row["expires_at"]) <= nowValue:
+            return None
+        return {"userId": int(row["user_id"]), "role": str(row["role"])}
+
+    def revokeSession(self, accessToken: str, now: float | None = None) -> bool:
+        nowValue = now if now is not None else time.time()
+        cursor = self.connection.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = ?
+            WHERE token_hash = ? AND revoked_at IS NULL
+            """,
+            (nowValue, self._hashToken(accessToken)),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
 
 
 @dataclass(frozen=True)
@@ -395,6 +490,7 @@ def createApp(
     rateLimiter: RateLimiter | None = None,
     nowProvider: Callable[[], float] | None = None,
     databaseUrl: str = DEFAULT_DATABASE_URL,
+    sessionTtlSeconds: int = 12 * 60 * 60,
 ) -> FastAPI:
     app = FastAPI(title="GTD Pedagógico Unioeste")
     app.state.databaseUrl = databaseUrl
@@ -428,8 +524,11 @@ def createApp(
         rf09Service=app.state.rf09Service,
     )
     app.state.rateLimiter = rateLimiter or MemoryRateLimiter(maxAttempts=5, windowSeconds=60)
-    app.state.sessionStore = InMemorySessionStore()
     app.state.nowProvider = nowProvider or time.time
+    app.state.sessionStore = SqliteSessionStore(
+        connection=app.state.dbConnection,
+        sessionTtlSeconds=sessionTtlSeconds,
+    )
 
     def _extractBearerToken(authorizationHeader: str | None) -> str | None:
         if authorizationHeader is None:
@@ -458,7 +557,7 @@ def createApp(
                 metadata={"reason": "missing_or_invalid_token", "ipHash": _minimizeIpIdentifier(clientIp)},
             )
             raise HTTPException(status_code=401, detail="não autenticado")
-        session = app.state.sessionStore.resolveSession(accessToken=accessToken)
+        session = app.state.sessionStore.resolveSession(accessToken=accessToken, now=app.state.nowProvider())
         if session is None:
             clientIp = request.client.host if request.client else "unknown"
             app.state.rf09Service.recordEvent(
@@ -575,7 +674,11 @@ def createApp(
                 status_code=401,
                 content={"success": False, "message": "credenciais inválidas"},
             )
-        accessToken = app.state.sessionStore.createSession(userId=int(user["id"]), role=resolvedRole)
+        accessToken = app.state.sessionStore.createSession(
+            userId=int(user["id"]),
+            role=resolvedRole,
+            now=app.state.nowProvider(),
+        )
         return LoginResponse(
             success=True,
             message=authResult.message,
@@ -583,6 +686,32 @@ def createApp(
             tokenType="Bearer",
             role=resolvedRole,
         )
+
+    @app.post("/auth/logout")
+    def logout(
+        request: Request,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ):
+        accessToken = _extractBearerToken(authorization)
+        if accessToken is None:
+            raise HTTPException(status_code=401, detail="não autenticado")
+
+        session = app.state.sessionStore.resolveSession(accessToken=accessToken, now=app.state.nowProvider())
+        if session is None:
+            raise HTTPException(status_code=401, detail="não autenticado")
+
+        currentUserId = int(session.get("userId", 0))
+        wasRevoked = app.state.sessionStore.revokeSession(accessToken=accessToken, now=app.state.nowProvider())
+        if wasRevoked:
+            app.state.rf09Service.recordEvent(
+                eventType="auth_logout",
+                result="success",
+                userId=currentUserId if currentUserId > 0 else None,
+                metadata={
+                    "ipHash": _minimizeIpIdentifier(request.client.host if request.client else "unknown"),
+                },
+            )
+        return {"success": True, "message": "logout realizado com sucesso"}
 
     @app.post(
         "/auth/password-reset/request",

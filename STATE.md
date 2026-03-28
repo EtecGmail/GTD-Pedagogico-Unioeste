@@ -342,3 +342,28 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Migrar `SessionStore` para backend persistente/distribuído e adicionar expiração de sessão.
 - Externalizar/rotacionar a chave de criptografia do cofre por ambiente com política operacional de rotação.
 - Evoluir RF-09 admin para governança completa (retenção, filtros/paginação, trilha operacional).
+
+- **28/03/2026 (hardening de autenticação fase 2: sessão persistente + TTL + revogação)** – Implementação orientada por TDD estrito para eliminar fragilidade de sessão em memória por processo e preparar cenário multi-instância. Primeiro foram adicionados testes em `tests/test_auth_http.py` cobrindo: (1) autenticação de sessão criada em uma instância e validada em outra com banco compartilhado, (2) rejeição de sessão expirada por TTL explícito, (3) revogação explícita via logout, (4) independência de múltiplas sessões do mesmo usuário e (5) garantia de não vazamento de token bruto em logs. Em seguida, foi implementado `SqliteSessionStore` no `http.py` com persistência em `auth_sessions`, armazenamento de `token_hash` (SHA-256), `expires_at`/`revoked_at` e contrato de revogação explícita. A resolução de usuário autenticado passou a validar sessão com `nowProvider` (TTL verificável), e foi adicionado endpoint `POST /auth/logout` para invalidar sessão atual com registro seguro de evento (`auth_logout`) sem dados sensíveis. O contrato externo Bearer, login blindado, dummy hash, rate limit, RBAC e ownership foram preservados e revalidados.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/http.py`
+- `tests/test_auth_http.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_auth_http.py -k 'sessao or logout or multiplas or token_bruto'` (falha inicial esperada no TDD antes da implementação; sucesso após implementação).
+- `poetry run pytest -q tests/test_auth_http.py` (sucesso: `24 passed`).
+- `poetry run pytest -q tests/test_rf02.py tests/test_rf03.py tests/test_rf04.py tests/test_rf06.py tests/test_rf07.py tests/test_rf08.py tests/test_rf09.py` (sucesso).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- O provider persistente atual usa SQLite compartilhado; para escala horizontal com alta concorrência em produção continua recomendado migrar para backend dedicado (ex.: PostgreSQL/Redis) mantendo o contrato do `SessionStore`.
+- Sessões expiradas/revogadas são invalidadas na leitura, mas ainda não há rotina de limpeza periódica da tabela `auth_sessions` para retenção operacional.
+- Ainda não existe endpoint administrativo de revogação por usuário/dispositivo; o ciclo atual cobre revogação da sessão corrente (logout) e base para expansão.
+
+### Próximos passos
+- Adicionar rotina de limpeza (job) para sessões expiradas/revogadas e políticas de retenção.
+- Evoluir para revogação administrativa por usuário/todas as sessões em cenários de incidente.
+- Implementar provider alternativo (PostgreSQL ou Redis) reutilizando o contrato `SessionStore` sem alterar domínio/HTTP externo.
