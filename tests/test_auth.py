@@ -98,3 +98,24 @@ def test_nao_deve_propagar_sqlite_integrity_error_no_cadastro_duplicado() -> Non
 
     assert isinstance(erro.value, DuplicateEmailError)
     assert not isinstance(erro.value, sqlite3.IntegrityError)
+
+
+def test_deve_cadastrar_usuario_com_role_e_recuperar_role_no_login() -> None:
+    auth = AuthService()
+    auth.register_user("admin@unioeste.br", "SenhaForte123", role="admin")
+
+    resultado = auth.login("admin@unioeste.br", "SenhaForte123")
+    usuario = auth.findUserByEmail("admin@unioeste.br")
+
+    assert resultado.success is True
+    assert usuario is not None
+    assert usuario["role"] == "admin"
+
+
+def test_deve_rejeitar_role_invalido_no_cadastro() -> None:
+    auth = AuthService()
+
+    with pytest.raises(ValueError) as erro:
+        auth.register_user("papel@unioeste.br", "SenhaForte123", role="gestor")
+
+    assert str(erro.value) == "papel de usuário inválido"

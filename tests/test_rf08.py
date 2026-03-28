@@ -14,6 +14,11 @@ from gtd_backend.rf08 import RF08Service
 def _toBase64(content: bytes) -> str:
     return b64encode(content).decode("utf-8")
 
+def _fakePdfContent(size: int = 32) -> bytes:
+    if size < 5:
+        size = 5
+    return b"%PDF-" + (b"x" * (size - 5))
+
 
 def _autenticarUsuario(client: TestClient, app, email: str) -> dict[str, str]:
     app.state.authService.register_user(email, "SenhaForte123")
@@ -44,7 +49,7 @@ def test_rf08_service_deve_agregar_metricas_minimas_do_dashboard() -> None:
     rf04Service.uploadCertificate(
         originalName="acc.pdf",
         contentType="application/pdf",
-        content=b"acc-content",
+        content=_fakePdfContent(30),
         hours=40,
         userId=1,
     )
@@ -170,7 +175,7 @@ def test_rf08_http_deve_expor_dashboard_e_endpoint_de_avanco_de_leitura() -> Non
         json={
             "originalName": "certificado.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"acc"),
+            "contentBase64": _toBase64(_fakePdfContent(28)),
             "hours": 30,
         },
         headers=headers,
@@ -266,7 +271,7 @@ def test_rf08_http_deve_rejeitar_sem_autenticacao_e_isolar_dashboard_por_usuario
         json={
             "originalName": "a.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"a"),
+            "contentBase64": _toBase64(_fakePdfContent(26)),
             "hours": 12,
         },
         headers=headersUserA,
@@ -287,7 +292,7 @@ def test_rf08_http_deve_rejeitar_sem_autenticacao_e_isolar_dashboard_por_usuario
         json={
             "originalName": "b.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"b"),
+            "contentBase64": _toBase64(_fakePdfContent(27)),
             "hours": 5,
         },
         headers=headersUserB,

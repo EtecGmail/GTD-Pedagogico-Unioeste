@@ -6,6 +6,9 @@ from argon2.exceptions import VerifyMismatchError, VerificationError
 
 CREDENCIAIS_INVALIDAS = "credenciais inválidas"
 EMAIL_JA_CADASTRADO = "e-mail já cadastrado"
+PAPEL_USUARIO_INVALIDO = "papel de usuário inválido"
+DEFAULT_USER_ROLE = "aluno"
+ALLOWED_USER_ROLES = {"aluno", "admin"}
 
 
 class DomainError(Exception):
@@ -38,10 +41,15 @@ class AuthService:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'aluno'
             )
             """
         )
+        columns = self.connection.execute("PRAGMA table_info(users)").fetchall()
+        existingColumns = {str(column["name"]) for column in columns}
+        if "role" not in existingColumns:
+            self.connection.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'aluno'")
         self.connection.commit()
 
     def _verifyPasswordHash(self, passwordHash: str, plainPassword: str) -> bool:
@@ -57,12 +65,19 @@ class AuthService:
             raise ValueError(CREDENCIAIS_INVALIDAS)
         return normalizedPassword
 
-    def register_user(self, email: str, plain_password: str) -> int:
+    def _normalizeRole(self, role: str) -> str:
+        normalizedRole = role.strip().lower()
+        if normalizedRole not in ALLOWED_USER_ROLES:
+            raise ValueError(PAPEL_USUARIO_INVALIDO)
+        return normalizedRole
+
+    def register_user(self, email: str, plain_password: str, role: str = DEFAULT_USER_ROLE) -> int:
+        normalizedRole = self._normalizeRole(role)
         passwordHash = self.passwordHasher.hash(plain_password)
         try:
             cursor = self.connection.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.lower().strip(), passwordHash),
+                "INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)",
+                (email.lower().strip(), passwordHash, normalizedRole),
             )
         except sqlite3.IntegrityError as error:
             raise DuplicateEmailError(EMAIL_JA_CADASTRADO) from error
@@ -89,12 +104,12 @@ class AuthService:
     def findUserByEmail(self, email: str) -> dict[str, int | str] | None:
         normalizedEmail = email.lower().strip()
         row = self.connection.execute(
-            "SELECT id, email FROM users WHERE email = ?",
+            "SELECT id, email, role FROM users WHERE email = ?",
             (normalizedEmail,),
         ).fetchone()
         if row is None:
             return None
-        return {"id": int(row["id"]), "email": str(row["email"])}
+        return {"id": int(row["id"]), "email": str(row["email"]), "role": str(row["role"])}
 
     def updateUserPasswordHash(self, userId: int, passwordHash: str) -> None:
         cursor = self.connection.execute(

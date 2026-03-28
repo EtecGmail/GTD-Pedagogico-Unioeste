@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from gtd_backend.auth import AuthService
+from gtd_backend.auth import ALLOWED_USER_ROLES, AuthService
 from gtd_backend.persistence import DEFAULT_DATABASE_URL, createSqliteConnection
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
@@ -50,6 +50,7 @@ class LoginResponse(BaseModel):
     message: str
     accessToken: str | None = None
     tokenType: str | None = None
+    role: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -346,31 +347,35 @@ class MemoryRateLimiter(RateLimiter):
 
 
 class SessionStore:
-    def createSession(self, userId: int) -> str:
+    def createSession(self, userId: int, role: str) -> str:
         raise NotImplementedError
 
-    def resolveUserId(self, accessToken: str) -> int | None:
+    def resolveSession(self, accessToken: str) -> dict[str, int | str] | None:
         raise NotImplementedError
 
 
 class InMemorySessionStore(SessionStore):
     def __init__(self) -> None:
-        self._tokenToUserId: dict[str, int] = {}
+        self._tokenToUser: dict[str, dict[str, int | str]] = {}
 
-    def createSession(self, userId: int) -> str:
+    def createSession(self, userId: int, role: str) -> str:
         if userId <= 0:
             raise ValueError("usuário inválido")
+        normalizedRole = role.strip().lower()
+        if normalizedRole not in ALLOWED_USER_ROLES:
+            raise ValueError("papel de sessão inválido")
         accessToken = secrets.token_urlsafe(32)
-        self._tokenToUserId[accessToken] = userId
+        self._tokenToUser[accessToken] = {"userId": userId, "role": normalizedRole}
         return accessToken
 
-    def resolveUserId(self, accessToken: str) -> int | None:
-        return self._tokenToUserId.get(accessToken)
+    def resolveSession(self, accessToken: str) -> dict[str, int | str] | None:
+        return self._tokenToUser.get(accessToken)
 
 
 @dataclass(frozen=True)
 class CurrentUser:
     userId: int
+    role: str
 
 
 def _minimizeEmailIdentifier(email: str) -> str:
@@ -453,8 +458,8 @@ def createApp(
                 metadata={"reason": "missing_or_invalid_token", "ipHash": _minimizeIpIdentifier(clientIp)},
             )
             raise HTTPException(status_code=401, detail="não autenticado")
-        userId = app.state.sessionStore.resolveUserId(accessToken=accessToken)
-        if userId is None:
+        session = app.state.sessionStore.resolveSession(accessToken=accessToken)
+        if session is None:
             clientIp = request.client.host if request.client else "unknown"
             app.state.rf09Service.recordEvent(
                 eventType="authorization_denied",
@@ -462,7 +467,28 @@ def createApp(
                 metadata={"reason": "invalid_session", "ipHash": _minimizeIpIdentifier(clientIp)},
             )
             raise HTTPException(status_code=401, detail="não autenticado")
-        return CurrentUser(userId=userId)
+        role = str(session.get("role", "")).strip().lower()
+        userId = int(session.get("userId", 0))
+        if role not in ALLOWED_USER_ROLES or userId <= 0:
+            clientIp = request.client.host if request.client else "unknown"
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                metadata={"reason": "invalid_role_session", "ipHash": _minimizeIpIdentifier(clientIp)},
+            )
+            raise HTTPException(status_code=401, detail="não autenticado")
+        return CurrentUser(userId=userId, role=role)
+
+    def requireAdmin(currentUser: CurrentUser = Depends(getCurrentUser)) -> CurrentUser:
+        if currentUser.role != "admin":
+            app.state.rf09Service.recordEvent(
+                eventType="authorization_denied",
+                result="denied",
+                userId=currentUser.userId,
+                metadata={"reason": "admin_role_required", "resource": "rf09_security_events"},
+            )
+            raise HTTPException(status_code=403, detail="acesso negado")
+        return currentUser
 
     @app.post("/auth/login", response_model=LoginResponse)
     def login(loginRequest: LoginRequest, request: Request):
@@ -538,12 +564,24 @@ def createApp(
                 "ipHash": _minimizeIpIdentifier(clientIp),
             },
         )
-        accessToken = app.state.sessionStore.createSession(userId=int(user["id"]))
+        resolvedRole = str(user.get("role", "")).strip().lower()
+        if resolvedRole not in ALLOWED_USER_ROLES:
+            app.state.rf09Service.recordEvent(
+                eventType="auth_login",
+                result="failure",
+                metadata={"reason": "invalid_user_role"},
+            )
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "credenciais inválidas"},
+            )
+        accessToken = app.state.sessionStore.createSession(userId=int(user["id"]), role=resolvedRole)
         return LoginResponse(
             success=True,
             message=authResult.message,
             accessToken=accessToken,
             tokenType="Bearer",
+            role=resolvedRole,
         )
 
     @app.post(
@@ -890,6 +928,13 @@ def createApp(
                 content={"success": False, "message": str(error)},
             )
         return StorageUsageResponse(**usageSummary)
+
+    @app.get("/rf09/security-events")
+    def listSecurityEvents(
+        limit: int = Query(default=100, ge=1, le=500),
+        currentUser: CurrentUser = Depends(requireAdmin),
+    ):
+        return app.state.rf09Service.listEvents(limit=limit)
 
     @app.get("/rf08/dashboard", response_model=StudentDashboardResponse)
     def getStudentDashboard(

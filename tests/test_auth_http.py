@@ -90,6 +90,24 @@ def test_login_http_deve_retornar_sucesso_para_credenciais_validas() -> None:
     assert isinstance(corpoResposta["accessToken"], str)
     assert len(corpoResposta["accessToken"]) >= 20
     assert corpoResposta["tokenType"] == "Bearer"
+    assert corpoResposta["role"] == "aluno"
+
+
+def test_login_http_deve_retornar_role_admin_para_usuario_admin() -> None:
+    app = createApp()
+    client = TestClient(app)
+
+    app.state.authService.register_user("admin@unioeste.br", "SenhaForte123", role="admin")
+
+    resposta = client.post(
+        "/auth/login",
+        json={"email": "admin@unioeste.br", "password": "SenhaForte123"},
+    )
+
+    assert resposta.status_code == 200
+    corpoResposta = resposta.json()
+    assert corpoResposta["success"] is True
+    assert corpoResposta["role"] == "admin"
 
 
 def test_login_http_deve_emitir_credencial_que_autentica_requisicao_protegida() -> None:
@@ -125,6 +143,62 @@ def test_rf02_http_deve_rejeitar_requisicao_sem_autenticacao() -> None:
     respostaSemToken = client.get("/rf02/inbox-items")
     assert respostaSemToken.status_code == 401
     assert respostaSemToken.json() == {"detail": "não autenticado"}
+
+
+def test_rf09_http_deve_restringir_endpoint_admin_para_papel_admin() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123", role="aluno")
+    app.state.authService.register_user("admin@unioeste.br", "SenhaForte123", role="admin")
+
+    tokenAluno = client.post(
+        "/auth/login",
+        json={"email": "aluna@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+    tokenAdmin = client.post(
+        "/auth/login",
+        json={"email": "admin@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    respostaAluno = client.get(
+        "/rf09/security-events",
+        headers={"Authorization": f"Bearer {tokenAluno}"},
+    )
+    assert respostaAluno.status_code == 403
+    assert respostaAluno.json() == {"detail": "acesso negado"}
+
+    respostaAdmin = client.get(
+        "/rf09/security-events",
+        headers={"Authorization": f"Bearer {tokenAdmin}"},
+    )
+    assert respostaAdmin.status_code == 200
+    assert isinstance(respostaAdmin.json(), list)
+
+
+def test_get_current_user_deve_rejeitar_role_ausente_ou_invalido_na_sessao() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("admin@unioeste.br", "SenhaForte123", role="admin")
+    token = client.post(
+        "/auth/login",
+        json={"email": "admin@unioeste.br", "password": "SenhaForte123"},
+    ).json()["accessToken"]
+
+    app.state.sessionStore._tokenToUser["token-invalido"] = {"userId": 1, "role": "gestor"}  # type: ignore[attr-defined]
+    respostaRoleInvalido = client.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": "Bearer token-invalido"},
+    )
+    assert respostaRoleInvalido.status_code == 401
+    assert respostaRoleInvalido.json() == {"detail": "não autenticado"}
+
+    app.state.sessionStore._tokenToUser[token] = {"userId": 1, "role": ""}  # type: ignore[attr-defined]
+    respostaRoleAusente = client.get(
+        "/rf02/inbox-items",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respostaRoleAusente.status_code == 401
+    assert respostaRoleAusente.json() == {"detail": "não autenticado"}
 
 
 def test_login_http_deve_validar_entradas_invalidas() -> None:

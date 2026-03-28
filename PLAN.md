@@ -114,3 +114,12 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
   - **Testes**: `sqlite:///:memory:` para isolamento e velocidade.
   - **Desenvolvimento**: `sqlite:///./<arquivo>.db` para persistência entre reinícios.
   - **Produção**: manter serviços desacoplados da origem da conexão para permitir `PostgreSQL` por provider específico sem refatoração ampla de domínio.
+
+## Decisão estrutural relevante (28/03/2026)
+
+- Introduzir **RBAC mínimo verificável** no núcleo de autenticação/sessão com papéis `aluno` e `admin`, mantendo compatibilidade com sessão Bearer já existente:
+  - `users.role` persistido no schema de autenticação (migração leve por `ALTER TABLE` quando coluna ausente);
+  - sessão opaca passa a armazenar `{userId, role}` com validação explícita de papel permitido;
+  - endpoint administrativo inicial de baixo acoplamento: `GET /rf09/security-events` restrito a `admin`.
+- Endurecer RF-04 com **detecção de tipo real por assinatura (magic bytes)** para PDF/PNG/JPEG antes de persistir, rejeitando mismatch com o MIME declarado.
+- Evoluir o cofre com **criptografia em repouso incremental** via abstração de cifra (`ContentCipher`), mantendo contrato de `CertificateStorage` e preparando troca futura de backend sem refatoração massiva.

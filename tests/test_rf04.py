@@ -38,7 +38,8 @@ def test_rf04_service_deve_salvar_certificado_com_identificador_unico_e_metadado
     assert isinstance(saved["fileIdentifier"], str)
     assert len(saved["fileIdentifier"]) >= 32
     assert isinstance(saved["metadata"], dict)
-    assert saved["metadata"]["storageVersion"] == 1
+    assert saved["metadata"]["storageVersion"] == 2
+    assert saved["metadata"]["encryptedAtRest"] is True
 
 
 def test_rf04_service_deve_rejeitar_tipo_nao_permitido_tamanho_acima_de_5mb_e_payload_invalido() -> None:
@@ -71,19 +72,63 @@ def test_rf04_service_deve_rejeitar_tipo_nao_permitido_tamanho_acima_de_5mb_e_pa
             assert str(error) == expectedError
 
 
+def test_rf04_service_deve_validar_magic_bytes_e_rejeitar_disfarce_de_tipo() -> None:
+    service = RF04Service(storage=InMemoryCertificateStorage())
+
+    service.uploadCertificate(
+        originalName="certificado.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7\nconteudo",
+        hours=4,
+    )
+    service.uploadCertificate(
+        originalName="certificado.png",
+        contentType="image/png",
+        content=b"\x89PNG\r\n\x1a\nconteudo",
+        hours=1,
+    )
+    service.uploadCertificate(
+        originalName="certificado.jpg",
+        contentType="image/jpeg",
+        content=b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01imagem",
+        hours=2,
+    )
+
+    cenariosInvalidos = [
+        ("image/png", b"nao-e-png", "assinatura real do arquivo não corresponde ao tipo declarado"),
+        ("application/pdf", b"texto livre", "assinatura real do arquivo não corresponde ao tipo declarado"),
+        (
+            "application/pdf",
+            b"\x89PNG\r\n\x1a\nmas-declarado-como-pdf",
+            "assinatura real do arquivo não corresponde ao tipo declarado",
+        ),
+    ]
+
+    for contentType, content, expectedError in cenariosInvalidos:
+        try:
+            service.uploadCertificate(
+                originalName="suspeito.bin",
+                contentType=contentType,
+                content=content,
+            )
+            assert False, "esperava ValueError para assinatura inválida"
+        except ValueError as error:
+            assert str(error) == expectedError
+
+
 def test_rf04_service_deve_gerar_storage_key_unica_para_evitar_colisoes() -> None:
     service = RF04Service(storage=InMemoryCertificateStorage())
 
     firstId = service.uploadCertificate(
         originalName="certificado.jpg",
         contentType="image/jpeg",
-        content=b"imagem-1",
+        content=b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01imagem-1",
         hours=2,
     )
     secondId = service.uploadCertificate(
         originalName="certificado.jpg",
         contentType="image/jpeg",
-        content=b"imagem-1",
+        content=b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01imagem-1",
         hours=3,
     )
 
@@ -97,14 +142,14 @@ def test_rf04_service_deve_listar_certificados_por_usuario() -> None:
     service.uploadCertificate(
         originalName="a.pdf",
         contentType="application/pdf",
-        content=b"a",
+        content=b"%PDF-1.7 a",
         hours=1,
         userId=1,
     )
     service.uploadCertificate(
         originalName="b.pdf",
         contentType="application/pdf",
-        content=b"b",
+        content=b"%PDF-1.7 b",
         hours=2,
         userId=2,
     )
@@ -112,6 +157,54 @@ def test_rf04_service_deve_listar_certificados_por_usuario() -> None:
     certificadosUser1 = service.listCertificates(userId=1)
     assert len(certificadosUser1) == 1
     assert certificadosUser1[0]["hours"] == 1
+
+
+def test_rf04_service_deve_armazenar_conteudo_criptografado_em_repouso_e_recuperar_original() -> None:
+    storage = InMemoryCertificateStorage()
+    service = RF04Service(storage=storage)
+    content = b"%PDF-1.7 payload sigiloso"
+
+    certificateId = service.uploadCertificate(
+        originalName="sigiloso.pdf",
+        contentType="application/pdf",
+        content=content,
+        hours=1,
+        userId=10,
+    )
+    certificate = service.listCertificates(userId=10)[0]
+    rawStored = storage._files[certificate["storageKey"]]  # type: ignore[attr-defined]
+
+    assert certificateId > 0
+    assert rawStored != content
+    assert b"payload sigiloso" not in rawStored
+
+    restored = service.getCertificateContent(certificateId=certificateId, userId=10)
+    assert restored == content
+
+
+def test_rf04_service_deve_tratar_falha_de_decrypt_e_lookup_com_segurança() -> None:
+    storage = InMemoryCertificateStorage()
+    service = RF04Service(storage=storage)
+    certificateId = service.uploadCertificate(
+        originalName="ok.pdf",
+        contentType="application/pdf",
+        content=b"%PDF-1.7 arquivo",
+        userId=1,
+    )
+
+    try:
+        service.getCertificateContent(certificateId=999, userId=1)
+        assert False, "esperava LookupError para certificado inexistente"
+    except LookupError as error:
+        assert str(error) == "certificado não encontrado"
+
+    certificate = service.listCertificates(userId=1)[0]
+    storage._files[certificate["storageKey"]] = b"dado-corrompido"  # type: ignore[attr-defined]
+    try:
+        service.getCertificateContent(certificateId=certificateId, userId=1)
+        assert False, "esperava ValueError para falha de decrypt"
+    except ValueError as error:
+        assert str(error) == "falha ao recuperar certificado"
 
 
 def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
@@ -129,7 +222,7 @@ def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
         json={
             "originalName": "certificado.png",
             "contentType": "image/png",
-            "contentBase64": _toBase64(b"conteudo-png"),
+            "contentBase64": _toBase64(b"\x89PNG\r\n\x1a\nconteudo-png"),
             "hours": 20,
         },
         headers=headers,
@@ -147,6 +240,7 @@ def test_rf04_http_deve_realizar_upload_e_listar_certificados() -> None:
     assert certificates[0]["contentType"] == "image/png"
     assert certificates[0]["hours"] == 20
     assert "fileIdentifier" in certificates[0]
+    assert certificates[0]["metadata"]["encryptedAtRest"] is True
 
 
 def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_nao_suportado() -> None:
@@ -171,7 +265,7 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
         json={
             "originalName": "certificado.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"conteudo"),
+            "contentBase64": _toBase64(b"%PDF-1.7 conteudo"),
             "hours": -10,
         },
         headers=headers,
@@ -207,12 +301,24 @@ def test_rf04_http_deve_rejeitar_payload_invalido_arquivo_maior_que_5mb_ou_tipo_
         json={
             "originalName": "certificado.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"a" * (5 * 1024 * 1024 + 1)),
+            "contentBase64": _toBase64(b"%PDF-" + b"a" * (5 * 1024 * 1024)),
         },
         headers=headers,
     )
     assert oversized.status_code == 400
     assert oversized.json()["message"] == "arquivo excede o limite de 5 MB"
+
+    mismatchMime = client.post(
+        "/rf04/certificates",
+        json={
+            "originalName": "mismatch.pdf",
+            "contentType": "application/pdf",
+            "contentBase64": _toBase64(b"\x89PNG\r\n\x1a\nconteudo"),
+        },
+        headers=headers,
+    )
+    assert mismatchMime.status_code == 400
+    assert mismatchMime.json()["message"] == "assinatura real do arquivo não corresponde ao tipo declarado"
 
 
 def test_rf04_http_deve_rejeitar_sem_autenticacao_e_restringir_ownership() -> None:
@@ -239,7 +345,7 @@ def test_rf04_http_deve_rejeitar_sem_autenticacao_e_restringir_ownership() -> No
         json={
             "originalName": "a.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"a"),
+            "contentBase64": _toBase64(b"%PDF-1.7 a"),
             "hours": 5,
         },
         headers=headersA,
@@ -249,7 +355,7 @@ def test_rf04_http_deve_rejeitar_sem_autenticacao_e_restringir_ownership() -> No
         json={
             "originalName": "b.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"b"),
+            "contentBase64": _toBase64(b"%PDF-1.7 b"),
             "hours": 7,
         },
         headers=headersB,
