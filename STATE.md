@@ -505,3 +505,31 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Executar `tests/test_postgresql_staging.py` e `scripts/postgresql_staging_smoke.sh` em ambiente com PostgreSQL real e coletar evidências de saída para fechamento formal da etapa de staging.
 - Evoluir tipagem dos serviços para protocolo de conexão desacoplado de `sqlite3` sem alterar comportamento já validado.
+
+- **28/03/2026 (staging PostgreSQL real / correção estrutural do runner de migração e smoke script)** – Novo ciclo orientado pelas falhas reais reportadas em staging. A análise do runner mostrou fragilidade no caminho PostgreSQL: o SQL de migração era enviado como script completo em uma única chamada `execute` quando a conexão não oferecia `executescript`. Em drivers/ambientes que exigem statement único por execução, esse comportamento pode impedir criação efetiva do schema e resultar em erro posterior `relation "users" does not exist`. A correção estrutural foi aplicada com execução statement-a-statement no caminho PostgreSQL, mantendo idempotência por `schema_migrations` e sem reintroduzir DDL em serviços. Em paralelo, `scripts/postgresql_staging_smoke.sh` foi corrigido para remover dependência de import de `gtd_backend` no bloco Python inline (causa direta do `ModuleNotFoundError`), mantendo mascaramento seguro da URL com `urllib.parse` e execução dos testes via Poetry.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `tests/test_persistence.py`
+- `scripts/postgresql_staging_smoke.sh`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run python - <<'PY' ... import gtd_backend ... PY` (falha reproduzida: `ModuleNotFoundError: No module named 'gtd_backend'` no contexto `poetry run python`).
+- `poetry run pytest -q tests/test_persistence.py` (sucesso: `11 passed`).
+- `poetry run pytest -q tests/test_postgresql_staging.py` (sucesso com `skip` esperado sem `POSTGRES_STAGING_DATABASE_URL`).
+- `bash scripts/postgresql_staging_smoke.sh` (falha controlada por pré-condição: variável `POSTGRES_STAGING_DATABASE_URL` ausente).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada com `1 skip` do cenário PostgreSQL real sem URL).
+
+### Falhas encontradas e causa-raiz
+- Falha 1 (migração PostgreSQL real): runner dependia de execução de script SQL completo em uma chamada única no caminho sem `executescript`, comportamento não robusto para todos os drivers/ambientes PostgreSQL.
+- Falha 2 (smoke script): import de `gtd_backend` no bloco Python inline era estruturalmente inválido fora do contexto de `PYTHONPATH` configurado pelo pytest.
+
+### Riscos remanescentes
+- A validação obrigatória fim a fim contra PostgreSQL real continua bloqueada neste ambiente atual por ausência de `POSTGRES_STAGING_DATABASE_URL`.
+- O parser de statements por `split(';')` atende ao baseline atual de migrações (DDL simples), mas deve evoluir se futuras migrações incluírem procedural SQL com delimitadores avançados.
+
+### Próximos passos
+- Reexecutar obrigatoriamente `poetry run pytest -q tests/test_postgresql_staging.py` e `bash scripts/postgresql_staging_smoke.sh` em ambiente com PostgreSQL real configurado.
+- Se surgir nova falha real no dialeto PostgreSQL, corrigir no runner/SQL de migração sem alterar validação do teste de staging.

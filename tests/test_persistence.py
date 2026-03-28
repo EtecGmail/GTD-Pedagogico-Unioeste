@@ -248,3 +248,61 @@ def test_apply_migrations_deve_inferir_dialeto_postgresql_pela_conexao_quando_da
         "VALUES (%s, NOW()::TEXT)" in query
         for query, _ in connection.executed
     )
+
+
+def test_apply_migrations_postgresql_deve_executar_script_em_statements_individuais(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrationsDir = tmp_path / "postgresql"
+    migrationsDir.mkdir(parents=True, exist_ok=True)
+    (migrationsDir / "0001_baseline.sql").write_text(
+        """
+        CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY);
+        """,
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "gtd_backend.persistence._resolveMigrationsDir",
+        lambda dialect: migrationsDir,
+    )
+
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, str]] | None = None) -> None:
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeSingleStatementPostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+
+        def execute(self, query: str, params: tuple | None = None):
+            normalized = " ".join(query.split())
+            if normalized.count(";") > 1:
+                raise AssertionError("migração deve executar statements individualmente")
+            self.executed.append(normalized)
+            if "SELECT version FROM schema_migrations" in normalized:
+                return FakeCursor([])
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+    connection = FakeSingleStatementPostgresConnection()
+
+    applyMigrations(connection=connection)
+
+    assert any(
+        query.startswith("CREATE TABLE IF NOT EXISTS users")
+        for query in connection.executed
+    )
+    assert any(
+        query.startswith("CREATE TABLE IF NOT EXISTS auth_sessions")
+        for query in connection.executed
+    )

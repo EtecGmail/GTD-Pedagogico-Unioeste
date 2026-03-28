@@ -290,7 +290,12 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
             continue
 
         sqlScript = migrationFile.read_text(encoding="utf-8")
-        connection.executescript(sqlScript) if hasattr(connection, "executescript") else connection.execute(sqlScript)
+        if hasattr(connection, "executescript"):
+            connection.executescript(sqlScript)
+        else:
+            statements = [statement.strip() for statement in sqlScript.split(";") if statement.strip()]
+            for statement in statements:
+                connection.execute(statement)
         connection.execute(
             f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (?, datetime('now'))"
             if dialect == "sqlite"
