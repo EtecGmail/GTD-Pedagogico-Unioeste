@@ -2,7 +2,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from gtd_backend.persistence import hasTableColumn
+from gtd_backend.persistence import applyMigrations
 
 
 VALID_INBOX_STATUSES = {"inbox", "next_action", "waiting"}
@@ -14,26 +14,12 @@ class RF02Service:
         nowProvider: Callable[[], datetime] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS inbox_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                content TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        if not hasTableColumn(connection=self.connection, tableName="inbox_items", columnName="user_id"):
-            self.connection.execute("ALTER TABLE inbox_items ADD COLUMN user_id INTEGER")
-        self.connection.commit()
 
     def _normalizeContent(self, content: str) -> str:
         return " ".join(content.strip().split())

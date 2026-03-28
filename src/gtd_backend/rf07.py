@@ -5,6 +5,7 @@ import sqlite3
 from typing import Protocol
 
 from gtd_backend.auth import AuthService, CREDENCIAIS_INVALIDAS
+from gtd_backend.persistence import applyMigrations
 
 
 class PasswordResetEmailSender(Protocol):
@@ -39,30 +40,11 @@ class RF07Service:
         self.emailSender = emailSender
         self.nowProvider = nowProvider
         self.tokenTtlHours = tokenTtlHours
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS password_reset_tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                token_hash TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token_hash ON password_reset_tokens(token_hash)"
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id)"
-        )
-        self.connection.commit()
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
 
     def _normalizeEmail(self, email: str) -> str:
         normalizedEmail = email.lower().strip()

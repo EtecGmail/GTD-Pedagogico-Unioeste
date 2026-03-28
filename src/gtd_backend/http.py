@@ -390,28 +390,6 @@ class SqliteSessionStore(SessionStore):
             raise ValueError("ttl da sessão deve ser positivo")
         self.connection = connection
         self.sessionTtlSeconds = sessionTtlSeconds
-        self._createTableIfNotExists()
-
-    def _createTableIfNotExists(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS auth_sessions (
-                token_hash TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                revoked_at REAL
-            )
-            """
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)"
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)"
-        )
-        self.connection.commit()
 
     def _hashToken(self, accessToken: str) -> str:
         return hashlib.sha256(accessToken.encode("utf-8")).hexdigest()

@@ -3,7 +3,7 @@ import sqlite3
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
-from gtd_backend.persistence import hasTableColumn
+from gtd_backend.persistence import applyMigrations
 
 CREDENCIAIS_INVALIDAS = "credenciais inválidas"
 EMAIL_JA_CADASTRADO = "e-mail já cadastrado"
@@ -30,26 +30,13 @@ class AuthService:
     """Serviço de autenticação com login blindado e Argon2id."""
 
     def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
         self.passwordHasher = PasswordHasher()
         self.dummyHash = self.passwordHasher.hash("senha-falsa-para-timing-attack")
-        self._setup_schema()
-
-    def _setup_schema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'aluno'
-            )
-            """
-        )
-        if not hasTableColumn(connection=self.connection, tableName="users", columnName="role"):
-            self.connection.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'aluno'")
-        self.connection.commit()
 
     def _verifyPasswordHash(self, passwordHash: str, plainPassword: str) -> bool:
         try:
