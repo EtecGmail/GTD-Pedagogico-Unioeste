@@ -1,62 +1,15 @@
 import sqlite3
 from collections.abc import Sequence
+from gtd_backend.persistence import applyMigrations
 
 
 class RF01Service:
     def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS professors (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                name TEXT NOT NULL,
-                normalized_name TEXT NOT NULL,
-                email TEXT NOT NULL
-            )
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_professors_user_name
-            ON professors (user_id, normalized_name)
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_professors_user_email
-            ON professors (user_id, email)
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS disciplines (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                name TEXT NOT NULL,
-                normalized_name TEXT NOT NULL,
-                code TEXT NOT NULL,
-                normalized_code TEXT NOT NULL,
-                UNIQUE(user_id, normalized_name, normalized_code)
-            )
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS discipline_professor (
-                discipline_id INTEGER NOT NULL,
-                professor_id INTEGER NOT NULL,
-                PRIMARY KEY (discipline_id, professor_id),
-                FOREIGN KEY (discipline_id) REFERENCES disciplines(id),
-                FOREIGN KEY (professor_id) REFERENCES professors(id)
-            )
-            """
-        )
-        self.connection.commit()
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
 
     def _normalizeText(self, value: str) -> str:
         return " ".join(value.strip().split())

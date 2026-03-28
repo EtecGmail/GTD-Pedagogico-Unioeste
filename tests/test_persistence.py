@@ -214,3 +214,37 @@ def test_has_table_column_deve_consultar_information_schema_em_postgresql() -> N
     assert hasTableColumn(connection=connection, tableName="users", columnName="role") is True
     assert "information_schema.columns" in str(connection.query)
     assert connection.params == ("users",)
+
+
+def test_apply_migrations_deve_inferir_dialeto_postgresql_pela_conexao_quando_database_url_ausente() -> None:
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, str]] | None = None) -> None:
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class FakePostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple]] = []
+            self.commits = 0
+
+        def execute(self, query: str, params: tuple | None = None):
+            self.executed.append((query.strip(), params or ()))
+            if "SELECT version FROM schema_migrations" in query:
+                return FakeCursor([])
+            return FakeCursor()
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    connection = FakePostgresConnection()
+
+    applyMigrations(connection=connection)
+
+    assert any(
+        "VALUES (%s, NOW()::TEXT)" in query
+        for query, _ in connection.executed
+    )

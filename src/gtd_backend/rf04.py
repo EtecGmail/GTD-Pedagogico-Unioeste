@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from gtd_backend.persistence import hasTableColumn
+from gtd_backend.persistence import applyMigrations
 
 MAX_CERTIFICATE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {
@@ -194,33 +194,14 @@ class RF04Service:
         nowProvider: Callable[[], datetime] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
         self.storage = storage
         self.contentCipher = contentCipher or HmacXorContentCipher()
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS acc_certificates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                file_identifier TEXT NOT NULL UNIQUE,
-                original_name TEXT NOT NULL,
-                content_type TEXT NOT NULL,
-                size_bytes INTEGER NOT NULL,
-                hours INTEGER,
-                storage_key TEXT NOT NULL UNIQUE,
-                metadata TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        if not hasTableColumn(connection=self.connection, tableName="acc_certificates", columnName="user_id"):
-            self.connection.execute("ALTER TABLE acc_certificates ADD COLUMN user_id INTEGER")
-        self.connection.commit()
 
     def uploadCertificate(
         self,

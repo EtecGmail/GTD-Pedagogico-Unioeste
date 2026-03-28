@@ -272,8 +272,13 @@ def _listAppliedMigrations(connection: DbConnectionProtocol) -> set[str]:
 
 
 def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = None) -> None:
-    settings = getDatabaseSettings(databaseUrl=databaseUrl)
-    migrationsDir = _resolveMigrationsDir(dialect=settings.dialect)
+    if databaseUrl is None:
+        dialect = getConnectionDialect(connection)
+    else:
+        settings = getDatabaseSettings(databaseUrl=databaseUrl)
+        dialect = settings.dialect
+
+    migrationsDir = _resolveMigrationsDir(dialect=dialect)
 
     _ensureMigrationsTable(connection=connection)
     appliedVersions = _listAppliedMigrations(connection=connection)
@@ -288,7 +293,7 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
         connection.executescript(sqlScript) if hasattr(connection, "executescript") else connection.execute(sqlScript)
         connection.execute(
             f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (?, datetime('now'))"
-            if settings.dialect == "sqlite"
+            if dialect == "sqlite"
             else f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (%s, NOW()::TEXT)",
             (version,),
         )

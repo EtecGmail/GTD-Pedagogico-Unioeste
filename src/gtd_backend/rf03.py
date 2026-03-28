@@ -3,7 +3,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from gtd_backend.persistence import hasTableColumn
+from gtd_backend.persistence import applyMigrations
 
 
 class RF03Service:
@@ -12,29 +12,12 @@ class RF03Service:
         nowProvider: Callable[[], datetime] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS reading_plans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                total_pages INTEGER NOT NULL,
-                deadline_days INTEGER NOT NULL,
-                daily_goal INTEGER NOT NULL,
-                is_overloaded INTEGER NOT NULL,
-                remaining_pages INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        if not hasTableColumn(connection=self.connection, tableName="reading_plans", columnName="user_id"):
-            self.connection.execute("ALTER TABLE reading_plans ADD COLUMN user_id INTEGER")
-        self.connection.commit()
 
     def createReadingPlan(self, totalPages: int, deadlineDays: int, userId: int | None = None) -> int:
         if totalPages <= 0:

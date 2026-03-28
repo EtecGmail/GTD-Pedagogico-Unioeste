@@ -4,6 +4,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from gtd_backend.persistence import applyMigrations
+
 
 class SecurityEventService:
     def __init__(
@@ -11,25 +13,12 @@ class SecurityEventService:
         nowProvider: Callable[[], datetime] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        ownsConnection = connection is None
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        if ownsConnection:
+            applyMigrations(connection=self.connection)
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
-        self._setupSchema()
-
-    def _setupSchema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS security_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_type TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                result TEXT NOT NULL,
-                user_id INTEGER,
-                metadata TEXT NOT NULL
-            )
-            """
-        )
-        self.connection.commit()
 
     def recordEvent(
         self,

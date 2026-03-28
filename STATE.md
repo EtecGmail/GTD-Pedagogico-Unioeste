@@ -470,3 +470,38 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Executar `docs/staging-postgresql.md` em runner/ambiente com PostgreSQL real disponível e `psycopg` instalado.
 - Persistir evidências da execução real (logs de migração + saída de smoke tests) para fechamento formal da etapa de staging técnico.
 - Avaliar inclusão de job opcional de CI para `postgresql` (gating não-bloqueante inicialmente) reutilizando `tests/test_postgresql_staging.py`.
+
+- **28/03/2026 (staging PostgreSQL real / correção de causa-raiz sem workaround)** – Correção estrutural aplicada para eliminar DDL SQLite residual no runtime da aplicação em cenário PostgreSQL. Foi identificado que múltiplos serviços ainda executavam `CREATE TABLE ... AUTOINCREMENT` no construtor, o que viola a estratégia de migrações formais e quebra em PostgreSQL durante `createApp`. A correção removeu bootstrap DDL runtime desses serviços (`AuthService`, `RF01Service`, `RF02Service`, `RF03Service`, `RF04Service`, `RF07Service`, `SecurityEventService`) e passou a usar `applyMigrations` apenas quando o serviço cria conexão própria (cenário de testes unitários). Para conexões injetadas (bootstrap real via `createApp`), não há mais criação de schema no serviço. Também foi corrigido `scripts/postgresql_staging_smoke.sh` para executar no contexto do projeto com `poetry run python`, eliminando falha de import (`ModuleNotFoundError: gtd_backend`) em execução local fora do ambiente resolvido do Poetry. `applyMigrations` foi ajustado para inferir dialeto pela conexão quando `databaseUrl` estiver ausente, evitando inferência indevida para SQLite em conexões PostgreSQL.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/auth.py`
+- `src/gtd_backend/rf01.py`
+- `src/gtd_backend/rf02.py`
+- `src/gtd_backend/rf03.py`
+- `src/gtd_backend/rf04.py`
+- `src/gtd_backend/rf07.py`
+- `src/gtd_backend/rf09.py`
+- `src/gtd_backend/http.py`
+- `src/gtd_backend/persistence.py`
+- `scripts/postgresql_staging_smoke.sh`
+- `tests/test_persistence.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_postgresql_staging.py` (sucesso com `skip` esperado sem `POSTGRES_STAGING_DATABASE_URL`).
+- `bash scripts/postgresql_staging_smoke.sh` (falha controlada por pré-condição: variável `POSTGRES_STAGING_DATABASE_URL` ausente).
+- `poetry run pytest -q tests/test_persistence.py tests/test_auth.py` (sucesso: `20 passed`).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada, com `1 skip` do cenário PostgreSQL real sem URL).
+
+### Falhas encontradas e causa-raiz
+- Falha 1 (PostgreSQL staging): serviços executavam DDL SQLite (`AUTOINCREMENT`) no runtime, contrariando estratégia de migrações formais e quebrando o bootstrap em PostgreSQL.
+- Falha 2 (smoke script): script executava bloco Python fora do `poetry run`, perdendo contexto de import do pacote local.
+
+### Riscos remanescentes
+- Validação fim a fim em PostgreSQL real continua dependente de ambiente com `POSTGRES_STAGING_DATABASE_URL` e driver PostgreSQL disponível.
+- Ainda existem pontos de tipagem estática com `sqlite3.Connection` em assinaturas de serviços; funcionalmente compatível no runtime atual, mas pode ser evoluído para protocolo de conexão em iteração futura.
+
+### Próximos passos
+- Executar `tests/test_postgresql_staging.py` e `scripts/postgresql_staging_smoke.sh` em ambiente com PostgreSQL real e coletar evidências de saída para fechamento formal da etapa de staging.
+- Evoluir tipagem dos serviços para protocolo de conexão desacoplado de `sqlite3` sem alterar comportamento já validado.

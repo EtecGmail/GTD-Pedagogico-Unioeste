@@ -160,3 +160,10 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
   - resolução incremental de `lastrowid` para inserts com PK `id` autoincremental, preservando contratos atuais dos serviços.
 - Substituir verificações de coluna baseadas em `PRAGMA table_info` por helper de dialeto (`hasTableColumn`), usando `information_schema.columns` no PostgreSQL.
 - Manter SQLite como padrão em testes/dev e usar PostgreSQL em staging/produção com baixo acoplamento ao dialeto.
+
+## Decisão estrutural relevante (28/03/2026 - remoção de DDL runtime residual e alinhamento com migrações)
+
+- Remover bootstrap de schema com `CREATE TABLE` em serviços de domínio (`AuthService`, `RF01`, `RF02`, `RF03`, `RF04`, `RF07`, `RF09`) para eliminar acoplamento de dialeto SQLite no runtime.
+- Padronizar inicialização de schema via `applyMigrations` (migrações formais versionadas) quando o serviço criar conexão própria em memória para testes isolados.
+- Quando a conexão é injetada externamente (caso de `createApp`/staging/produção), o serviço não executa DDL; assume schema já provisionado por migrações no bootstrap da aplicação.
+- `applyMigrations` passa a inferir o dialeto pela própria conexão quando `databaseUrl` não é informado, evitando fallback implícito para SQLite em conexões PostgreSQL.
