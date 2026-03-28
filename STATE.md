@@ -444,3 +444,29 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Adicionar cenário de integração opcional com PostgreSQL real (ex.: container efêmero em CI) para validar caminho fim a fim em ambiente próximo de staging.
 - Evoluir gradualmente queries de insert para `RETURNING id` explícito nos pontos de maior criticidade, reduzindo dependência do fallback de sequência.
 - Continuar rollout incremental de hardenings operacionais (staging, secret manager e observabilidade), sem alterar contratos de domínio já estabilizados.
+
+- **28/03/2026 (staging técnico PostgreSQL / preparação operacional + smoke dedicado)** – Execução da etapa de preparação para validação em PostgreSQL real com foco em mudanças pequenas e revisáveis, sem regressão do caminho SQLite. Foi adicionado um teste de smoke de integração (`tests/test_postgresql_staging.py`) preparado para rodar contra instância PostgreSQL real via variável `POSTGRES_STAGING_DATABASE_URL`, cobrindo bootstrap/migrações idempotentes, autenticação/sessão/logout, RBAC aluno/admin (RF-09), RF-02/RF-06, RF-03/RF-08, RF-04/RF-05/RF-10 e solicitação cega do RF-07. Também foi criado script operacional `scripts/postgresql_staging_smoke.sh` e documentação mínima em `docs/staging-postgresql.md` com passos de configuração de `DATABASE_URL`, aplicação de migrações e execução dos smoke tests. A suíte completa em SQLite permaneceu verde.
+
+### Arquivos modificados no ciclo atual
+- `tests/test_postgresql_staging.py`
+- `scripts/postgresql_staging_smoke.sh`
+- `docs/staging-postgresql.md`
+- `README.md`
+- `pyproject.toml`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `apt-get update -y && apt-get install -y postgresql postgresql-client` (**falha de ambiente**: repositórios bloqueados por proxy/403).
+- `poetry run pytest -q tests/test_postgresql_staging.py` (sucesso com `skip` esperado sem `POSTGRES_STAGING_DATABASE_URL`).
+- `scripts/postgresql_staging_smoke.sh` (falha controlada: variável `POSTGRES_STAGING_DATABASE_URL` ausente).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada, incluindo novo teste marcado e um `skip`).
+- `poetry run python - <<'PY' ... import psycopg ... PY` (confirmado `ModuleNotFoundError`, driver PostgreSQL indisponível neste ambiente).
+
+### Problemas/riscos remanescentes
+- Ainda não foi possível executar validação fim a fim em PostgreSQL real neste ambiente devido indisponibilidade de infraestrutura local (sem Docker/PostgreSQL instalado e bloqueio de `apt`).
+- Driver `psycopg` não está instalado por padrão no ambiente atual; execução real com PostgreSQL depende dessa dependência no contexto de staging/CI.
+
+### Próximos passos
+- Executar `docs/staging-postgresql.md` em runner/ambiente com PostgreSQL real disponível e `psycopg` instalado.
+- Persistir evidências da execução real (logs de migração + saída de smoke tests) para fechamento formal da etapa de staging técnico.
+- Avaliar inclusão de job opcional de CI para `postgresql` (gating não-bloqueante inicialmente) reutilizando `tests/test_postgresql_staging.py`.
