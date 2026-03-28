@@ -392,3 +392,28 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 - Adicionar rotina de limpeza (job) para sessões expiradas/revogadas e políticas de retenção.
 - Evoluir para revogação administrativa por usuário/todas as sessões em cenários de incidente.
 - Implementar provider alternativo (PostgreSQL ou Redis) reutilizando o contrato `SessionStore` sem alterar domínio/HTTP externo.
+
+- **28/03/2026 (maturação infra / bootstrap PostgreSQL + migrações formais)** – Evolução incremental da infraestrutura de persistência com foco em produção e sem quebra do domínio existente. O ciclo começou com TDD em `tests/test_persistence.py` para cobrir: (1) resolução de `databaseUrl` por ambiente, (2) falha segura de configuração em produção, (3) compatibilidade de bootstrap para configuração PostgreSQL sem vazar segredo e (4) aplicação idempotente de migrações com criação das tabelas principais. Em seguida, `persistence.py` foi evoluído com `PersistenceConfigurationError`, `resolveDatabaseUrl`, `getDatabaseSettings`, `createDatabaseConnection` (dialetos `sqlite` e `postgresql`) e `applyMigrations` com tabela `schema_migrations`. Foram adicionadas migrações formais baseline por dialeto em `src/gtd_backend/db/migrations/sqlite/0001_baseline.sql` e `src/gtd_backend/db/migrations/postgresql/0001_baseline.sql`. Por fim, `createApp` passou a executar `applyMigrations(...)` no bootstrap antes de instanciar serviços, preservando compatibilidade com SQLite (dev/teste) e preparando caminho de produção com PostgreSQL.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `src/gtd_backend/http.py`
+- `src/gtd_backend/db/migrations/sqlite/0001_baseline.sql`
+- `src/gtd_backend/db/migrations/postgresql/0001_baseline.sql`
+- `tests/test_persistence.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_persistence.py` (falha inicial esperada no TDD: `ImportError` por símbolos ainda não implementados; sucesso após implementação: `7 passed`).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- A camada de domínio ainda utiliza SQL orientado a SQLite (ex.: placeholders `?` e uso de `PRAGMA` em setup incremental). Assim, apesar do bootstrap/migrações para PostgreSQL já estarem estruturados, a execução plena dos serviços sobre conexão PostgreSQL ainda requer adaptação incremental de compatibilidade SQL por módulo.
+- O driver PostgreSQL (`psycopg`) é tratado como dependência de produção e não foi adicionado ao ambiente de desenvolvimento atual para evitar mudança de dependência sem necessidade imediata local.
+
+### Próximos passos
+- Introduzir camada mínima de abstração de query paramstyle/dialeto para permitir execução dos serviços existentes em PostgreSQL sem refatoração massiva.
+- Validar migração end-to-end em ambiente de staging com PostgreSQL real (incluindo sessão, auth, RF-01 a RF-10) e ampliar testes de integração por dialeto.
+- Documentar runbook operacional de migrações (`up`, rollback controlado, e validação pós-deploy) para uso em produção.
