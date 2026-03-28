@@ -18,7 +18,12 @@ from gtd_backend.persistence import DEFAULT_DATABASE_URL, createSqliteConnection
 from gtd_backend.rf01 import RF01Service
 from gtd_backend.rf02 import RF02Service
 from gtd_backend.rf03 import RF03Service
-from gtd_backend.rf04 import RF04Service, InMemoryCertificateStorage
+from gtd_backend.rf04 import (
+    ContentCipher,
+    RF04Service,
+    InMemoryCertificateStorage,
+    buildCertificateCipherFromEnvironment,
+)
 from gtd_backend.rf05 import RF05Service
 from gtd_backend.rf06 import RF06Service
 from gtd_backend.rf07 import InMemoryPasswordResetEmailSender, RF07Service
@@ -491,6 +496,8 @@ def createApp(
     nowProvider: Callable[[], float] | None = None,
     databaseUrl: str = DEFAULT_DATABASE_URL,
     sessionTtlSeconds: int = 12 * 60 * 60,
+    environmentName: str | None = None,
+    certificateCipher: ContentCipher | None = None,
 ) -> FastAPI:
     app = FastAPI(title="GTD Pedagógico Unioeste")
     app.state.databaseUrl = databaseUrl
@@ -499,8 +506,12 @@ def createApp(
     app.state.rf01Service = RF01Service(connection=app.state.dbConnection)
     app.state.rf02Service = RF02Service(connection=app.state.dbConnection)
     app.state.rf03Service = RF03Service(connection=app.state.dbConnection)
+    resolvedCertificateCipher = certificateCipher or buildCertificateCipherFromEnvironment(
+        environmentName=environmentName
+    )
     app.state.rf04Service = RF04Service(
         storage=InMemoryCertificateStorage(),
+        contentCipher=resolvedCertificateCipher,
         connection=app.state.dbConnection,
     )
     app.state.rf05Service = RF05Service(rf04Service=app.state.rf04Service, defaultTargetHours=200)

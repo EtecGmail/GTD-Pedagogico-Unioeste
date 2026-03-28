@@ -133,3 +133,12 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 - Definir expiração explícita por TTL configurável (`sessionTtlSeconds`, padrão 12h), validada no `resolveSession`.
 - Definir revogação explícita por marcação (`revoked_at`) e expor endpoint mínimo `POST /auth/logout` para invalidar a sessão corrente sem acoplamento ao restante do domínio.
 - Manter compatibilidade externa com Bearer token opaco e com as regras existentes de login blindado, RBAC e ownership.
+
+## Decisão estrutural relevante (28/03/2026 - hardening cofre fase 3)
+
+- Externalizar a configuração de criptografia do RF-04 com resolução explícita por ambiente, separando bootstrap de aplicação e lógica de cifra:
+  - `buildCertificateCipherFromEnvironment(...)` passa a montar `keyring` com base em variáveis de ambiente (`CERTIFICATE_KEY_ACTIVE_VERSION`, `CERTIFICATE_KEY_<versão>`, `CERTIFICATE_KEY_LEGACY_VERSIONS`);
+  - em `production`, ausência de chave ativa agora falha de forma explícita e segura (`EncryptionConfigurationError`) sem vazar nomes/valores sensíveis;
+  - em `development/test`, fallback controlado para chave local continua disponível apenas para evitar quebra do fluxo local.
+- Introduzir versionamento explícito de chave nos metadados persistidos de certificado (`metadata.keyVersion`) para novas gravações, mantendo `storageVersion` e `encryptedAtRest`.
+- Implementar keyring mínimo incremental (chave ativa para escrita + legadas para leitura), com compatibilidade retroativa para registros legados sem `keyVersion` e sem migração destrutiva em massa.
