@@ -311,3 +311,34 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Evoluir o RF-10 para cota configurável por usuário/plano sem quebrar contrato do endpoint.
 - Integrar estratégia de notificação (push/e-mail) reaproveitando o evento `storage_quota_near_limit` com throttling centralizado.
+
+- **28/03/2026 (hardening de segurança fase 1: RBAC + validação real de arquivo + criptografia em repouso)** – Entrega conduzida em TDD estrito para fechar os três bloqueios da auditoria QA/OffSec. Primeiro foram adicionados testes de regressão/aceitação para: (1) RBAC real com distinção `aluno` vs `admin`, incluindo negação segura de endpoint administrativo para aluno e tratamento seguro de sessão com role ausente/inválida; (2) upload RF-04 com validação de assinatura real (magic bytes) para PDF/PNG/JPG e rejeição de spoofing/mismatch de MIME; (3) storage do cofre com criptografia em repouso real, metadados `encryptedAtRest=true`, recuperação por decrypt e tratamento seguro de falhas de lookup/decrypt. Em seguida, a implementação mínima segura foi aplicada com mudanças incrementais: `AuthService` passou a persistir e validar `role`, a sessão passou a carregar `{userId, role}` e o HTTP ganhou gate administrativo (`/rf09/security-events`) restrito a `admin`; o `RF04Service` passou a detectar tipo real, cifrar conteúdo antes de salvar e expor recuperação segura via decrypt. Fluxos existentes de login blindado, dummy hash, rate limit, ownership e RF-09/RF-10 foram preservados e validados na suíte completa.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/auth.py`
+- `src/gtd_backend/http.py`
+- `src/gtd_backend/rf04.py`
+- `tests/test_auth.py`
+- `tests/test_auth_http.py`
+- `tests/test_rf04.py`
+- `tests/test_rf05.py`
+- `tests/test_rf08.py`
+- `tests/test_rf09.py`
+- `tests/test_rf10.py`
+- `PLAN.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_auth.py tests/test_auth_http.py tests/test_rf04.py tests/test_rf09.py` (falha inicial esperada no TDD antes da implementação; sucesso após implementação).
+- `poetry run pytest -q` (falha inicial de regressão após hardening de assinatura real; sucesso após ajuste dos testes de RF-05/RF-08/RF-10 para payloads com assinaturas válidas).
+- `poetry run python -m compileall src` (sucesso: compilação dos módulos sem erro).
+
+### Problemas/riscos remanescentes
+- O `SessionStore` continua em memória por processo; para produção/multi-instância ainda é necessário provider compartilhado com TTL/revogação.
+- A cifra em repouso foi implementada de forma incremental no provider em memória; para produção, falta conectar backend persistente com gestão segura de chave via ambiente/secret manager.
+- O endpoint administrativo de RF-09 é mínimo (listagem com limite); paginação avançada, retenção e trilha de auditoria expandida podem ser evoluídas em fase seguinte.
+
+### Próximos passos
+- Migrar `SessionStore` para backend persistente/distribuído e adicionar expiração de sessão.
+- Externalizar/rotacionar a chave de criptografia do cofre por ambiente com política operacional de rotação.
+- Evoluir RF-09 admin para governança completa (retenção, filtros/paginação, trilha operacional).

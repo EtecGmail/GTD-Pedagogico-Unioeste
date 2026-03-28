@@ -11,6 +11,11 @@ from gtd_backend.rf10 import RF10Service
 def _toBase64(content: bytes) -> str:
     return b64encode(content).decode("utf-8")
 
+def _fakePdfContent(size: int) -> bytes:
+    if size < 5:
+        size = 5
+    return b"%PDF-" + (b"z" * (size - 5))
+
 
 def _login(client: TestClient, email: str, password: str) -> str:
     response = client.post("/auth/login", json={"email": email, "password": password})
@@ -36,19 +41,19 @@ def test_rf10_service_deve_somar_apenas_certificados_do_usuario_e_ativar_alerta_
     rf04Service.uploadCertificate(
         originalName="u1-a.pdf",
         contentType="application/pdf",
-        content=b"a" * 450,
+        content=_fakePdfContent(450),
         userId=1,
     )
     rf04Service.uploadCertificate(
         originalName="u1-b.pdf",
         contentType="application/pdf",
-        content=b"b" * 450,
+        content=_fakePdfContent(450),
         userId=1,
     )
     rf04Service.uploadCertificate(
         originalName="u2.pdf",
         contentType="application/pdf",
-        content=b"c" * 900,
+        content=_fakePdfContent(900),
         userId=2,
     )
 
@@ -73,7 +78,7 @@ def test_rf10_service_deve_sinalizar_quando_ultrapassar_cota() -> None:
     rf04Service.uploadCertificate(
         originalName="u1.pdf",
         contentType="application/pdf",
-        content=b"a" * 1_001,
+        content=_fakePdfContent(1_001),
         userId=1,
     )
     service = RF10Service(rf04Service=rf04Service, quotaBytes=1_000)
@@ -109,7 +114,7 @@ def test_rf10_http_deve_expor_resumo_de_cota_para_usuario_autenticado_com_isolam
         json={
             "originalName": "a.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"a" * 900),
+            "contentBase64": _toBase64(_fakePdfContent(900)),
         },
         headers={"Authorization": f"Bearer {tokenA}"},
     )
@@ -118,7 +123,7 @@ def test_rf10_http_deve_expor_resumo_de_cota_para_usuario_autenticado_com_isolam
         json={
             "originalName": "b.pdf",
             "contentType": "application/pdf",
-            "contentBase64": _toBase64(b"b" * 300),
+            "contentBase64": _toBase64(_fakePdfContent(300)),
         },
         headers={"Authorization": f"Bearer {tokenB}"},
     )
@@ -149,7 +154,7 @@ def test_rf10_service_deve_registrar_evento_uma_vez_ao_entrar_na_faixa_de_alerta
     rf04Service.uploadCertificate(
         originalName="u1.pdf",
         contentType="application/pdf",
-        content=b"a" * 900,
+        content=_fakePdfContent(900),
         userId=1,
     )
 

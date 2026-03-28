@@ -1,4 +1,6 @@
 import hashlib
+import hmac
+import os
 import re
 import sqlite3
 import uuid
@@ -17,6 +19,9 @@ class CertificateStorage:
     def save(self, storageKey: str, content: bytes) -> None:
         raise NotImplementedError
 
+    def load(self, storageKey: str) -> bytes:
+        raise NotImplementedError
+
     def exists(self, storageKey: str) -> bool:
         raise NotImplementedError
 
@@ -28,8 +33,58 @@ class InMemoryCertificateStorage(CertificateStorage):
     def save(self, storageKey: str, content: bytes) -> None:
         self._files[storageKey] = content
 
+    def load(self, storageKey: str) -> bytes:
+        if storageKey not in self._files:
+            raise LookupError("arquivo não encontrado no cofre")
+        return self._files[storageKey]
+
     def exists(self, storageKey: str) -> bool:
         return storageKey in self._files
+
+
+class ContentCipher:
+    def encrypt(self, plainContent: bytes) -> bytes:
+        raise NotImplementedError
+
+    def decrypt(self, cipherContent: bytes) -> bytes:
+        raise NotImplementedError
+
+
+class HmacXorContentCipher(ContentCipher):
+    def __init__(self, encryptionKey: bytes | None = None) -> None:
+        configuredKey = encryptionKey or os.environ.get("CERTIFICATE_STORAGE_KEY", "").encode("utf-8")
+        if configuredKey:
+            self.encryptionKey = hashlib.sha256(configuredKey).digest()
+        else:
+            self.encryptionKey = hashlib.sha256(b"gtd-pedagogico-unioeste-dev-key").digest()
+
+    def encrypt(self, plainContent: bytes) -> bytes:
+        nonce = os.urandom(16)
+        stream = self._buildStream(len(plainContent), nonce)
+        encryptedBody = bytes([plainByte ^ streamByte for plainByte, streamByte in zip(plainContent, stream)])
+        signature = hmac.new(self.encryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
+        return b"GTD1" + nonce + signature + encryptedBody
+
+    def decrypt(self, cipherContent: bytes) -> bytes:
+        if len(cipherContent) < 52 or not cipherContent.startswith(b"GTD1"):
+            raise ValueError("payload criptografado inválido")
+        nonce = cipherContent[4:20]
+        expectedSignature = cipherContent[20:52]
+        encryptedBody = cipherContent[52:]
+        computedSignature = hmac.new(self.encryptionKey, nonce + encryptedBody, digestmod=hashlib.sha256).digest()
+        if not hmac.compare_digest(expectedSignature, computedSignature):
+            raise ValueError("assinatura criptográfica inválida")
+        stream = self._buildStream(len(encryptedBody), nonce)
+        return bytes([encryptedByte ^ streamByte for encryptedByte, streamByte in zip(encryptedBody, stream)])
+
+    def _buildStream(self, size: int, nonce: bytes) -> bytes:
+        output = bytearray()
+        counter = 0
+        while len(output) < size:
+            block = hashlib.sha256(self.encryptionKey + nonce + counter.to_bytes(8, "big")).digest()
+            output.extend(block)
+            counter += 1
+        return bytes(output[:size])
 
 
 def _sanitizeOriginalName(originalName: str) -> str:
@@ -49,12 +104,14 @@ class RF04Service:
     def __init__(
         self,
         storage: CertificateStorage,
+        contentCipher: ContentCipher | None = None,
         nowProvider: Callable[[], datetime] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
         self.connection = connection or sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.storage = storage
+        self.contentCipher = contentCipher or HmacXorContentCipher()
         self.nowProvider = nowProvider or (lambda: datetime.now(tz=UTC))
         self._setupSchema()
 
@@ -101,11 +158,14 @@ class RF04Service:
             raise ValueError("horas devem ser zero ou positivas")
         if userId is not None and userId <= 0:
             raise ValueError("usuário do certificado é inválido")
+        detectedContentType = self._detectContentType(content)
+        if detectedContentType != contentType:
+            raise ValueError("assinatura real do arquivo não corresponde ao tipo declarado")
 
         fileIdentifier = uuid.uuid4().hex
         storageKey = self._buildUniqueStorageKey(content=content, contentType=contentType)
         createdAt = self.nowProvider().isoformat()
-        metadata = '{"storageVersion":1,"encryptedAtRest":false}'
+        metadata = '{"storageVersion":2,"encryptedAtRest":true}'
 
         cursor = self.connection.execute(
             """
@@ -134,9 +194,38 @@ class RF04Service:
                 createdAt,
             ),
         )
-        self.storage.save(storageKey=storageKey, content=content)
+        encryptedContent = self.contentCipher.encrypt(content)
+        self.storage.save(storageKey=storageKey, content=encryptedContent)
         self.connection.commit()
         return int(cursor.lastrowid)
+
+    def getCertificateContent(self, certificateId: int, userId: int | None = None) -> bytes:
+        if certificateId <= 0:
+            raise ValueError("certificado inválido")
+        if userId is not None and userId <= 0:
+            raise ValueError("usuário do certificado é inválido")
+
+        if userId is None:
+            row = self.connection.execute(
+                "SELECT storage_key FROM acc_certificates WHERE id = ?",
+                (certificateId,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                "SELECT storage_key FROM acc_certificates WHERE id = ? AND user_id = ?",
+                (certificateId, userId),
+            ).fetchone()
+        if row is None:
+            raise LookupError("certificado não encontrado")
+        storageKey = str(row["storage_key"])
+
+        try:
+            encryptedContent = self.storage.load(storageKey=storageKey)
+            return self.contentCipher.decrypt(encryptedContent)
+        except LookupError:
+            raise
+        except Exception as error:
+            raise ValueError("falha ao recuperar certificado") from error
 
     def _buildUniqueStorageKey(self, content: bytes, contentType: str) -> str:
         extension = ALLOWED_CONTENT_TYPES[contentType]
@@ -200,8 +289,17 @@ class RF04Service:
                 "sizeBytes": int(row["size_bytes"]),
                 "hours": int(row["hours"]) if row["hours"] is not None else None,
                 "storageKey": str(row["storage_key"]),
-                "metadata": {"storageVersion": 1, "encryptedAtRest": False},
+                "metadata": {"storageVersion": 2, "encryptedAtRest": True},
                 "createdAt": str(row["created_at"]),
             }
             for row in rows
         ]
+
+    def _detectContentType(self, content: bytes) -> str | None:
+        if content.startswith(b"%PDF-"):
+            return "application/pdf"
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if content.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        return None

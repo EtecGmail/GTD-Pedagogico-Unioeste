@@ -145,3 +145,27 @@ def test_rf09_deve_registrar_upload_invalido_sem_vazar_content_base64() -> None:
     event = next(event for event in events if event["eventType"] == "certificate_upload_rejected")
     assert event["result"] == "rejected"
     assert "QUJDRA==" not in str(event)
+
+
+def test_rf09_endpoint_admin_deve_exigir_role_admin() -> None:
+    app = createApp()
+    client = TestClient(app)
+    app.state.authService.register_user("aluna@unioeste.br", "SenhaForte123", role="aluno")
+    app.state.authService.register_user("admin@unioeste.br", "SenhaForte123", role="admin")
+
+    tokenAluno = _login(client, "aluna@unioeste.br", "SenhaForte123")
+    tokenAdmin = _login(client, "admin@unioeste.br", "SenhaForte123")
+
+    denied = client.get(
+        "/rf09/security-events",
+        headers={"Authorization": f"Bearer {tokenAluno}"},
+    )
+    assert denied.status_code == 403
+    assert denied.json() == {"detail": "acesso negado"}
+
+    allowed = client.get(
+        "/rf09/security-events?limit=5",
+        headers={"Authorization": f"Bearer {tokenAdmin}"},
+    )
+    assert allowed.status_code == 200
+    assert isinstance(allowed.json(), list)

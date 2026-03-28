@@ -10,6 +10,11 @@ from gtd_backend.rf05 import RF05Service
 def _toBase64(content: bytes) -> str:
     return b64encode(content).decode("utf-8")
 
+def _fakePdfContent(size: int = 32) -> bytes:
+    if size < 5:
+        size = 5
+    return b"%PDF-" + (b"a" * (size - 5))
+
 
 def _uploadCertificate(
     client: TestClient,
@@ -37,19 +42,19 @@ def test_rf05_service_deve_calcular_progresso_com_base_nas_horas_dos_certificado
     rf04Service.uploadCertificate(
         originalName="a.pdf",
         contentType="application/pdf",
-        content=b"a",
+        content=_fakePdfContent(20),
         hours=20,
     )
     rf04Service.uploadCertificate(
         originalName="b.pdf",
         contentType="application/pdf",
-        content=b"b",
+        content=_fakePdfContent(21),
         hours=15,
     )
     rf04Service.uploadCertificate(
         originalName="c.pdf",
         contentType="application/pdf",
-        content=b"c",
+        content=_fakePdfContent(22),
         hours=None,
     )
 
@@ -68,14 +73,14 @@ def test_rf05_service_deve_considerar_apenas_certificados_do_usuario_informado()
     rf04Service.uploadCertificate(
         originalName="a.pdf",
         contentType="application/pdf",
-        content=b"a",
+        content=_fakePdfContent(23),
         hours=30,
         userId=1,
     )
     rf04Service.uploadCertificate(
         originalName="b.pdf",
         contentType="application/pdf",
-        content=b"b",
+        content=_fakePdfContent(24),
         hours=20,
         userId=2,
     )
@@ -101,7 +106,7 @@ def test_rf05_service_deve_tratar_sem_certificados_e_meta_ultrapassada() -> None
     rf04Service.uploadCertificate(
         originalName="x.pdf",
         contentType="application/pdf",
-        content=b"x",
+        content=_fakePdfContent(25),
         hours=250,
     )
     completedService = RF05Service(rf04Service=rf04Service, defaultTargetHours=200)
@@ -146,7 +151,7 @@ def test_rf05_http_deve_expor_endpoint_de_progresso_com_meta_padrao_e_personaliz
         client,
         originalName="acc-1.pdf",
         contentType="application/pdf",
-        content=b"conteudo-1",
+        content=_fakePdfContent(31),
         hours=30,
         headers=headers,
     )
@@ -154,7 +159,7 @@ def test_rf05_http_deve_expor_endpoint_de_progresso_com_meta_padrao_e_personaliz
         client,
         originalName="acc-2.pdf",
         contentType="application/pdf",
-        content=b"conteudo-2",
+        content=_fakePdfContent(32),
         hours=20,
         headers=headers,
     )
@@ -217,7 +222,7 @@ def test_rf05_http_deve_rejeitar_sem_autenticacao_e_refletir_apenas_dados_do_usu
         client,
         originalName="a.pdf",
         contentType="application/pdf",
-        content=b"a",
+        content=_fakePdfContent(33),
         hours=30,
         headers=headersA,
     )
@@ -225,7 +230,7 @@ def test_rf05_http_deve_rejeitar_sem_autenticacao_e_refletir_apenas_dados_do_usu
         client,
         originalName="b.pdf",
         contentType="application/pdf",
-        content=b"b",
+        content=_fakePdfContent(34),
         hours=10,
         headers=headersB,
     )
