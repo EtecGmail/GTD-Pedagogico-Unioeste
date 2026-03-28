@@ -27,3 +27,7 @@ httpx = "^0.28.1"
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "integration: testes de integração",
+  "postgresql: testes dependentes de PostgreSQL real",
+]
