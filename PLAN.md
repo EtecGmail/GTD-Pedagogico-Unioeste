@@ -123,3 +123,13 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
   - endpoint administrativo inicial de baixo acoplamento: `GET /rf09/security-events` restrito a `admin`.
 - Endurecer RF-04 com **detecção de tipo real por assinatura (magic bytes)** para PDF/PNG/JPEG antes de persistir, rejeitando mismatch com o MIME declarado.
 - Evoluir o cofre com **criptografia em repouso incremental** via abstração de cifra (`ContentCipher`), mantendo contrato de `CertificateStorage` e preparando troca futura de backend sem refatoração massiva.
+
+## Decisão estrutural relevante (28/03/2026 - hardening auth fase 2)
+
+- Evoluir o contrato de sessão para suportar operações explícitas de ciclo de vida: `createSession`, `resolveSession` e `revokeSession`.
+- Substituir o provider padrão em memória por `SqliteSessionStore` persistente na conexão compartilhada da aplicação:
+  - tabela `auth_sessions` com `token_hash` (não persistir token bruto), `user_id`, `role`, `created_at`, `expires_at` e `revoked_at`;
+  - índice por `user_id` e por `expires_at` para consultas e manutenção incremental.
+- Definir expiração explícita por TTL configurável (`sessionTtlSeconds`, padrão 12h), validada no `resolveSession`.
+- Definir revogação explícita por marcação (`revoked_at`) e expor endpoint mínimo `POST /auth/logout` para invalidar a sessão corrente sem acoplamento ao restante do domínio.
+- Manter compatibilidade externa com Bearer token opaco e com as regras existentes de login blindado, RBAC e ownership.
