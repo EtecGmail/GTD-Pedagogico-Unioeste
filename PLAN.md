@@ -167,3 +167,9 @@ Cada funcionalidade abaixo corresponde a um requisito funcional (RF). Para cada 
 - Padronizar inicialização de schema via `applyMigrations` (migrações formais versionadas) quando o serviço criar conexão própria em memória para testes isolados.
 - Quando a conexão é injetada externamente (caso de `createApp`/staging/produção), o serviço não executa DDL; assume schema já provisionado por migrações no bootstrap da aplicação.
 - `applyMigrations` passa a inferir o dialeto pela própria conexão quando `databaseUrl` não é informado, evitando fallback implícito para SQLite em conexões PostgreSQL.
+
+## Decisão estrutural relevante (28/03/2026 - robustez de runner PostgreSQL e smoke script Poetry)
+
+- Fortalecer o runner de migrações para PostgreSQL executando **statements SQL individualmente** no caminho sem `executescript`, evitando dependência de suporte a múltiplos comandos em uma única chamada `execute`.
+- Preservar transação/commit por versão de migração (`schema_migrations`) sem introduzir DDL em runtime de serviço.
+- Tornar o smoke script de staging independente de import do pacote local no bloco inline Python, usando mascaramento de URL com biblioteca padrão e mantendo execução dos testes via `poetry run`.
