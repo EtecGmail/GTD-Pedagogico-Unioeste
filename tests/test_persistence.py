@@ -9,6 +9,7 @@ from gtd_backend.http import createApp
 from gtd_backend.persistence import (
     PostgresqlConnectionCompat,
     PersistenceConfigurationError,
+    _splitSqlStatements,
     applyMigrations,
     createDatabaseConnection,
     hasTableColumn,
@@ -306,3 +307,103 @@ def test_apply_migrations_postgresql_deve_executar_script_em_statements_individu
         query.startswith("CREATE TABLE IF NOT EXISTS auth_sessions")
         for query in connection.executed
     )
+
+
+def test_apply_migrations_deve_falhar_quando_nao_ha_arquivos_sql_no_dialeto(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrationsDir = tmp_path / "postgresql-vazio"
+    migrationsDir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "gtd_backend.persistence._resolveMigrationsDir",
+        lambda dialect: migrationsDir,
+    )
+
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, str]] | None = None) -> None:
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class FakePostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def execute(self, query: str, params: tuple | None = None):
+            if "SELECT version FROM schema_migrations" in query:
+                return FakeCursor([])
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+    with pytest.raises(PersistenceConfigurationError, match="nenhuma migração SQL"):
+        applyMigrations(connection=FakePostgresConnection())
+
+
+def test_apply_migrations_nao_deve_registrar_versao_quando_falha_execucao(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrationsDir = tmp_path / "postgresql-failing"
+    migrationsDir.mkdir(parents=True, exist_ok=True)
+    (migrationsDir / "0001_baseline.sql").write_text(
+        """
+        CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY);
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "gtd_backend.persistence._resolveMigrationsDir",
+        lambda dialect: migrationsDir,
+    )
+
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, str]] | None = None) -> None:
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeFailingPostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+
+        def execute(self, query: str, params: tuple | None = None):
+            normalized = " ".join(query.split())
+            self.executed.append(normalized)
+            if "SELECT version FROM schema_migrations" in normalized:
+                return FakeCursor([])
+            if normalized.startswith("CREATE TABLE IF NOT EXISTS auth_sessions"):
+                raise RuntimeError("falha proposital no DDL")
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+    connection = FakeFailingPostgresConnection()
+
+    with pytest.raises(RuntimeError, match="falha proposital"):
+        applyMigrations(connection=connection)
+
+    assert not any(
+        query.startswith("INSERT INTO schema_migrations")
+        for query in connection.executed
+    )
+
+
+def test_split_sql_statements_deve_preservar_ponto_e_virgula_em_string_literal() -> None:
+    sqlScript = """
+    CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY);
+    INSERT INTO users (email, password_hash, role) VALUES ('ana;silva@uni.br', 'hash', 'aluno');
+    """
+
+    statements = _splitSqlStatements(sqlScript=sqlScript)
+
+    assert len(statements) == 2
+    assert "ana;silva@uni.br" in statements[1]

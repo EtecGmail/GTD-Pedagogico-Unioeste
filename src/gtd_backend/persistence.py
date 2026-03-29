@@ -271,6 +271,63 @@ def _listAppliedMigrations(connection: DbConnectionProtocol) -> set[str]:
     return {str(row[0] if not isinstance(row, dict) else row["version"]) for row in rows}
 
 
+def _listMigrationFiles(migrationsDir: Path) -> list[Path]:
+    migrationFiles = sorted(migrationsDir.glob("*.sql"))
+    if not migrationFiles:
+        raise PersistenceConfigurationError("nenhuma migração SQL encontrada para o dialeto configurado")
+    return migrationFiles
+
+
+def _splitSqlStatements(sqlScript: str) -> list[str]:
+    statements: list[str] = []
+    buffer: list[str] = []
+    quoteChar: str | None = None
+    previousChar = ""
+    index = 0
+
+    while index < len(sqlScript):
+        currentChar = sqlScript[index]
+        nextChar = sqlScript[index + 1] if index + 1 < len(sqlScript) else ""
+
+        if quoteChar is None and currentChar == "-" and nextChar == "-":
+            while index < len(sqlScript) and sqlScript[index] not in {"\n", "\r"}:
+                index += 1
+            continue
+
+        if quoteChar is None and currentChar in {"'", '"'}:
+            quoteChar = currentChar
+            buffer.append(currentChar)
+            previousChar = currentChar
+            index += 1
+            continue
+
+        if quoteChar is not None and currentChar == quoteChar and previousChar != "\\":
+            quoteChar = None
+            buffer.append(currentChar)
+            previousChar = currentChar
+            index += 1
+            continue
+
+        if quoteChar is None and currentChar == ";":
+            statement = "".join(buffer).strip()
+            if statement:
+                statements.append(statement)
+            buffer = []
+            previousChar = currentChar
+            index += 1
+            continue
+
+        buffer.append(currentChar)
+        previousChar = currentChar
+        index += 1
+
+    trailingStatement = "".join(buffer).strip()
+    if trailingStatement:
+        statements.append(trailingStatement)
+
+    return statements
+
+
 def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = None) -> None:
     if databaseUrl is None:
         dialect = getConnectionDialect(connection)
@@ -283,7 +340,7 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
     _ensureMigrationsTable(connection=connection)
     appliedVersions = _listAppliedMigrations(connection=connection)
 
-    migrationFiles = sorted(migrationsDir.glob("*.sql"))
+    migrationFiles = _listMigrationFiles(migrationsDir=migrationsDir)
     for migrationFile in migrationFiles:
         version = migrationFile.stem
         if version in appliedVersions:
@@ -293,7 +350,7 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
         if hasattr(connection, "executescript"):
             connection.executescript(sqlScript)
         else:
-            statements = [statement.strip() for statement in sqlScript.split(";") if statement.strip()]
+            statements = _splitSqlStatements(sqlScript=sqlScript)
             for statement in statements:
                 connection.execute(statement)
         connection.execute(
