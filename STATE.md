@@ -533,3 +533,28 @@ Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas 
 ### Próximos passos
 - Reexecutar obrigatoriamente `poetry run pytest -q tests/test_postgresql_staging.py` e `bash scripts/postgresql_staging_smoke.sh` em ambiente com PostgreSQL real configurado.
 - Se surgir nova falha real no dialeto PostgreSQL, corrigir no runner/SQL de migração sem alterar validação do teste de staging.
+
+- **29/03/2026 (runner de migrações PostgreSQL / correção estrutural de descoberta + parse + garantias anti-registro-falso)** – Novo ciclo focado na causa-raiz reportada em staging real (`relation "users" does not exist` após `applyMigrations`). O diagnóstico confirmou um ponto estrutural no runner: quando o diretório do dialeto existe, mas não há arquivos `.sql` descobertos, a rotina criava `schema_migrations` e encerrava silenciosamente sem aplicar baseline nem registrar versão; além disso, o split de statements era simplista (`split(';')`) e frágil para casos com `;` em literais. A correção reforçou o contrato formal de migração: (1) `applyMigrations` agora falha explicitamente se não houver migrações SQL no dialeto selecionado (`nenhuma migração SQL encontrada...`), impedindo falso-positivo de bootstrap; (2) o parser de statements foi centralizado em `_splitSqlStatements` para execução individual robusta sem quebrar conteúdo literal; (3) testes de regressão garantem não registrar versão em `schema_migrations` quando um statement falha durante aplicação. A arquitetura formal de migração foi preservada, sem DDL runtime em serviços e sem fallback silencioso para outro dialeto/pasta.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `tests/test_persistence.py`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_persistence.py` (sucesso: `14 passed`).
+- `poetry run pytest -q tests/test_postgresql_staging.py` (sucesso com `skip` esperado sem `POSTGRES_STAGING_DATABASE_URL`).
+- `bash scripts/postgresql_staging_smoke.sh` (falha controlada por pré-condição: variável `POSTGRES_STAGING_DATABASE_URL` ausente).
+- `poetry run pytest -q` (sucesso: suíte completa aprovada com `1 skip` do cenário PostgreSQL real sem URL).
+
+### Causa-raiz confirmada
+- O runner permitia caminho de sucesso silencioso quando nenhuma migração SQL era descoberta para o dialeto, materializando apenas `schema_migrations` e não aplicando baseline/tabelas principais.
+- O parse de SQL por `split(';')` era estruturalmente frágil para scripts mais ricos.
+
+### Riscos remanescentes
+- A validação obrigatória final em PostgreSQL real continua dependente de ambiente com `POSTGRES_STAGING_DATABASE_URL` configurada neste runner.
+- O parser incremental cobre baseline atual e casos de literal com `;`, mas ainda não implementa gramática completa para blocos SQL procedural com delimitadores avançados.
+
+### Próximos passos
+- Reexecutar `poetry run pytest -q tests/test_postgresql_staging.py` e `bash scripts/postgresql_staging_smoke.sh` em runner com PostgreSQL real e anexar evidências de `schema_migrations` + existência de `users`.
+- Se forem introduzidas migrações com SQL procedural (`DO $$ ... $$`), evoluir o parser para suporte explícito a dollar-quoting completo.
