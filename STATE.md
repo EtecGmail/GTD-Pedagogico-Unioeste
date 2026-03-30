@@ -26,6 +26,28 @@ Este arquivo acompanha o status das tarefas do projeto **GTD Pedagógico Unioest
 
 ## Histórico
 
+- **30/03/2026 (correção estrutural do runner de migração PostgreSQL + documentação operacional)** – Diagnóstico focado no bootstrap de migrações confirmou risco de inconsistência entre `schema_migrations` e materialização física da baseline (caso em que a versão `0001_baseline` pode estar registrada, mas a tabela `users` não existir no schema ativo). Correção aplicada em `applyMigrations`: criação de *guard rails* de materialização para baseline (`users` obrigatória), reconciliação automática de drift (reexecução da baseline quando marcada porém não materializada), validação pós-execução antes de registrar/atualizar `schema_migrations` e manutenção da idempotência sem DDL ad-hoc em serviços. Testes TDD adicionados para cobrir reconciliação em SQLite e PostgreSQL fake (com `schema_migrations` inconsistente), além da manutenção dos cenários de falha sem registro indevido. README reescrito para operação real (SQLite local + staging PostgreSQL), incluindo setup com Poetry, variáveis, Docker, smoke técnico, troubleshooting e checklist de continuidade para equipe/Codex.
+
+### Arquivos modificados no ciclo atual
+- `src/gtd_backend/persistence.py`
+- `tests/test_persistence.py`
+- `README.md`
+- `STATE.md`
+
+### Comandos executados e resultados
+- `poetry run pytest -q tests/test_persistence.py` (falha inicial esperada após introdução dos guards de materialização; sucesso após ajuste dos doubles de teste: `16 passed`).
+- `poetry run pytest -q tests/test_postgresql_staging.py` (executado; `1 skipped` por ausência de `POSTGRES_STAGING_DATABASE_URL` neste ambiente).
+- `bash scripts/postgresql_staging_smoke.sh` (falhou por pré-requisito ausente: variável `POSTGRES_STAGING_DATABASE_URL` não configurada).
+- `poetry run pytest -q` (sucesso: suíte relevante completa aprovada com skip do staging real quando variável não existe).
+
+### Problemas/riscos remanescentes
+- A validação obrigatória em PostgreSQL real permanece dependente de ambiente com `POSTGRES_STAGING_DATABASE_URL` e banco acessível; neste ciclo não foi possível comprovar execução real do smoke por ausência da variável no runner.
+- A guarda de materialização está focalizada na baseline (`0001_baseline` com tabela `users`), o que resolve a causa-raiz atual; futuras migrações críticas devem declarar guardas equivalentes conforme evolução do schema.
+
+### Próximos passos
+- Executar novamente `tests/test_postgresql_staging.py` e `scripts/postgresql_staging_smoke.sh` em ambiente local com PostgreSQL real configurado para confirmar o caminho de staging ponta a ponta.
+- Ao adicionar novas migrações estruturais, expandir `MIGRATION_MATERIALIZATION_GUARDS` para incluir tabelas/artefatos essenciais por versão.
+
 Registre nesta seção um resumo curto de cada ciclo de trabalho: data, tarefas concluídas, dificuldades, resultados de testes e próximos passos.
 
 - **25/03/2026** – Início do projeto. Documentos de contexto e plano preparados. Aguardando definição de stack tecnológica.
