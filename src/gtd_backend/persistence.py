@@ -11,6 +11,9 @@ from urllib.parse import urlparse
 DEFAULT_DATABASE_URL = "sqlite:///:memory:"
 SUPPORTED_DATABASE_SCHEMES = {"sqlite", "postgres", "postgresql"}
 MIGRATIONS_TABLE_NAME = "schema_migrations"
+MIGRATION_MATERIALIZATION_GUARDS: dict[str, set[str]] = {
+    "0001_baseline": {"users"},
+}
 
 
 class PersistenceConfigurationError(ValueError):
@@ -278,6 +281,46 @@ def _listMigrationFiles(migrationsDir: Path) -> list[Path]:
     return migrationFiles
 
 
+def _tableExists(connection: DbConnectionProtocol, tableName: str, dialect: str) -> bool:
+    if dialect == "sqlite":
+        cursor = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (tableName,),
+        )
+    else:
+        cursor = connection.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = current_schema() AND table_name = %s
+            ) AS table_exists
+            """,
+            (tableName,),
+        )
+    if cursor is None:
+        return False
+    row = cursor.fetchall()
+    if not row:
+        return False
+    firstRow = row[0]
+    if isinstance(firstRow, dict):
+        if "table_exists" in firstRow:
+            return bool(firstRow["table_exists"])
+        return bool(next(iter(firstRow.values()), False))
+    return bool(firstRow[0])
+
+
+def _isMigrationMaterialized(connection: DbConnectionProtocol, version: str, dialect: str) -> bool:
+    guardedTables = MIGRATION_MATERIALIZATION_GUARDS.get(version, set())
+    if not guardedTables:
+        return True
+    return all(
+        _tableExists(connection=connection, tableName=tableName, dialect=dialect)
+        for tableName in guardedTables
+    )
+
+
 def _splitSqlStatements(sqlScript: str) -> list[str]:
     statements: list[str] = []
     buffer: list[str] = []
@@ -343,7 +386,8 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
     migrationFiles = _listMigrationFiles(migrationsDir=migrationsDir)
     for migrationFile in migrationFiles:
         version = migrationFile.stem
-        if version in appliedVersions:
+        versionAlreadyApplied = version in appliedVersions
+        if versionAlreadyApplied and _isMigrationMaterialized(connection=connection, version=version, dialect=dialect):
             continue
 
         sqlScript = migrationFile.read_text(encoding="utf-8")
@@ -353,10 +397,23 @@ def applyMigrations(connection: DbConnectionProtocol, databaseUrl: str | None = 
             statements = _splitSqlStatements(sqlScript=sqlScript)
             for statement in statements:
                 connection.execute(statement)
-        connection.execute(
-            f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (?, datetime('now'))"
-            if dialect == "sqlite"
-            else f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (%s, NOW()::TEXT)",
-            (version,),
-        )
+        if not _isMigrationMaterialized(connection=connection, version=version, dialect=dialect):
+            raise PersistenceConfigurationError(
+                f"migração {version} executada sem materializar tabelas obrigatórias"
+            )
+        if versionAlreadyApplied:
+            connection.execute(
+                f"UPDATE {MIGRATIONS_TABLE_NAME} SET applied_at = datetime('now') WHERE version = ?"
+                if dialect == "sqlite"
+                else f"UPDATE {MIGRATIONS_TABLE_NAME} SET applied_at = NOW()::TEXT WHERE version = %s",
+                (version,),
+            )
+        else:
+            connection.execute(
+                f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (?, datetime('now'))"
+                if dialect == "sqlite"
+                else f"INSERT INTO {MIGRATIONS_TABLE_NAME} (version, applied_at) VALUES (%s, NOW()::TEXT)",
+                (version,),
+            )
+            appliedVersions.add(version)
         connection.commit()

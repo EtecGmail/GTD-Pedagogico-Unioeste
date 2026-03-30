@@ -149,6 +149,37 @@ def test_apply_migrations_deve_criar_tabelas_principais_necessarias(tmp_path: Pa
     assert expectedTables.issubset(createdTables)
 
 
+def test_apply_migrations_deve_reconciliar_baseline_quando_schema_migrations_esta_inconsistente(
+    tmp_path: Path,
+) -> None:
+    databaseFile = tmp_path / "gtd-migrations-drift.db"
+    connection = sqlite3.connect(databaseFile, check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))",
+        ("0001_baseline",),
+    )
+    connection.commit()
+
+    applyMigrations(connection=connection, databaseUrl=f"sqlite:///{databaseFile}")
+
+    tabelaUsers = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("users",),
+    ).fetchone()
+    assert tabelaUsers is not None
+    versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
+    assert [str(row[0]) for row in versions] == ["0001_baseline"]
+
+
 def test_postgresql_connection_compat_deve_adaptar_paramstyle_qmark_para_percent_s() -> None:
     class FakeCursor:
         def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
@@ -231,11 +262,16 @@ def test_apply_migrations_deve_inferir_dialeto_postgresql_pela_conexao_quando_da
         def __init__(self) -> None:
             self.executed: list[tuple[str, tuple]] = []
             self.commits = 0
+            self.usersExists = False
 
         def execute(self, query: str, params: tuple | None = None):
             self.executed.append((query.strip(), params or ()))
             if "SELECT version FROM schema_migrations" in query:
                 return FakeCursor([])
+            if "information_schema.tables" in query:
+                return FakeCursor([{"table_exists": self.usersExists}])
+            if query.strip().startswith("CREATE TABLE IF NOT EXISTS users"):
+                self.usersExists = True
             return FakeCursor()
 
         def commit(self) -> None:
@@ -282,6 +318,7 @@ def test_apply_migrations_postgresql_deve_executar_script_em_statements_individu
 
         def __init__(self) -> None:
             self.executed: list[str] = []
+            self.usersExists = False
 
         def execute(self, query: str, params: tuple | None = None):
             normalized = " ".join(query.split())
@@ -290,6 +327,10 @@ def test_apply_migrations_postgresql_deve_executar_script_em_statements_individu
             self.executed.append(normalized)
             if "SELECT version FROM schema_migrations" in normalized:
                 return FakeCursor([])
+            if "information_schema.tables" in normalized:
+                return FakeCursor([{"table_exists": self.usersExists}])
+            if normalized.startswith("CREATE TABLE IF NOT EXISTS users"):
+                self.usersExists = True
             return FakeCursor()
 
         def commit(self) -> None:
@@ -395,6 +436,60 @@ def test_apply_migrations_nao_deve_registrar_versao_quando_falha_execucao(
         query.startswith("INSERT INTO schema_migrations")
         for query in connection.executed
     )
+
+
+def test_apply_migrations_postgresql_deve_reexecutar_baseline_quando_users_nao_existir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrationsDir = tmp_path / "postgresql-drift"
+    migrationsDir.mkdir(parents=True, exist_ok=True)
+    (migrationsDir / "0001_baseline.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY);",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "gtd_backend.persistence._resolveMigrationsDir",
+        lambda dialect: migrationsDir,
+    )
+
+    class FakeCursor:
+        def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeDriftedPostgresConnection:
+        __gtd_dialect__ = "postgresql"
+
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+            self.usersExists = False
+
+        def execute(self, query: str, params: tuple | None = None):
+            normalized = " ".join(query.split())
+            self.executed.append(normalized)
+            if "SELECT version FROM schema_migrations" in normalized:
+                return FakeCursor([{"version": "0001_baseline"}])
+            if "information_schema.tables" in normalized:
+                return FakeCursor([{"table_exists": self.usersExists}])
+            if normalized.startswith("CREATE TABLE IF NOT EXISTS users"):
+                self.usersExists = True
+                return FakeCursor()
+            if normalized.startswith("UPDATE schema_migrations"):
+                return FakeCursor()
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+    connection = FakeDriftedPostgresConnection()
+
+    applyMigrations(connection=connection)
+
+    assert any(query.startswith("CREATE TABLE IF NOT EXISTS users") for query in connection.executed)
+    assert any(query.startswith("UPDATE schema_migrations") for query in connection.executed)
 
 
 def test_split_sql_statements_deve_preservar_ponto_e_virgula_em_string_literal() -> None:
